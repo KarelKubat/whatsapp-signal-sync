@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/google/uuid"
 	"go.mau.fi/whatsmeow"
@@ -20,14 +22,25 @@ type SyncEngine struct {
 	sig                   *SignalClient
 	done                  chan struct{}
 	personalSignalGroupID string
+
+	stateFilePath string
+	state         *State
+	stateMu       sync.Mutex
+
+	// Deduplication caches to prevent echo loops in linked groups
+	waSentIDs     map[string]time.Time
+	sigSentTimes  map[int64]time.Time
+	cacheMu       sync.Mutex
 }
 
 func NewSyncEngine(cfg *Config, waClient *WhatsAppClient, sigClient *SignalClient) *SyncEngine {
 	return &SyncEngine{
-		cfg:      cfg,
-		waClient: waClient,
-		sig:      sigClient,
-		done:     make(chan struct{}),
+		cfg:          cfg,
+		waClient:     waClient,
+		sig:          sigClient,
+		done:         make(chan struct{}),
+		waSentIDs:    make(map[string]time.Time),
+		sigSentTimes: make(map[int64]time.Time),
 	}
 }
 
@@ -52,12 +65,119 @@ func (s *SyncEngine) Start(ctx context.Context) {
 		log.Println("[SyncEngine] No 'Whatsapp Signal Sync' Signal group found. Defaulting personal forwards to 'Note to Self' (your Signal number).")
 	}
 
+	// Load State
+	statePath := filepath.Join(filepath.Dir(s.cfg.Storage.WhatsAppDB), "state.json")
+	s.stateFilePath = statePath
+	var errState error
+	s.state, errState = LoadState(statePath)
+	if errState != nil {
+		log.Printf("[SyncEngine] Failed to load state: %v. Missed messages sync might be skipped.", errState)
+	} else {
+		log.Printf("[SyncEngine] Loaded state: WhatsApp Last Timestamp: %d, Signal Last Timestamp: %d", s.state.LastWhatsAppTimestamp, s.state.LastSignalTimestamp)
+	}
+
 	go s.listenWhatsApp(ctx)
 	go s.listenSignal(ctx)
+	go s.periodicSyncLoop(ctx)
+	go s.cleanCacheLoop(ctx)
 }
 
 func (s *SyncEngine) Stop() {
 	close(s.done)
+}
+
+func (s *SyncEngine) addWASentID(id string) {
+	s.cacheMu.Lock()
+	defer s.cacheMu.Unlock()
+	s.waSentIDs[id] = time.Now()
+}
+
+func (s *SyncEngine) isWASent(id string) bool {
+	s.cacheMu.Lock()
+	defer s.cacheMu.Unlock()
+	_, exists := s.waSentIDs[id]
+	if exists {
+		delete(s.waSentIDs, id)
+		return true
+	}
+	return false
+}
+
+func (s *SyncEngine) addSigSentTime(t int64) {
+	s.cacheMu.Lock()
+	defer s.cacheMu.Unlock()
+	s.sigSentTimes[t] = time.Now()
+}
+
+func (s *SyncEngine) isSigSent(t int64) bool {
+	s.cacheMu.Lock()
+	defer s.cacheMu.Unlock()
+	_, exists := s.sigSentTimes[t]
+	if exists {
+		delete(s.sigSentTimes, t)
+		return true
+	}
+	return false
+}
+
+func (s *SyncEngine) cleanCacheLoop(ctx context.Context) {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-s.done:
+			return
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			s.cacheMu.Lock()
+			now := time.Now()
+			for id, t := range s.waSentIDs {
+				if now.Sub(t) > 1*time.Minute {
+					delete(s.waSentIDs, id)
+				}
+			}
+			for timeKey, t := range s.sigSentTimes {
+				if now.Sub(t) > 1*time.Minute {
+					delete(s.sigSentTimes, timeKey)
+				}
+			}
+			s.cacheMu.Unlock()
+		}
+	}
+}
+
+func (s *SyncEngine) periodicSyncLoop(ctx context.Context) {
+	// Trigger an initial receive on startup to pull any missed messages immediately
+	log.Println("[SyncEngine] Triggering initial Signal receive catch-up...")
+	if err := s.sig.TriggerReceive(ctx); err != nil {
+		if isAlreadyReceivingError(err) {
+			log.Println("[SyncEngine] Signal daemon is already actively receiving messages (connection is healthy).")
+		} else {
+			log.Printf("[SyncEngine] Initial Signal receive trigger failed: %v", err)
+		}
+	}
+
+	ticker := time.NewTicker(5 * time.Minute)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-s.done:
+			return
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			log.Println("[SyncEngine] Running periodic Signal receive catch-up...")
+			if err := s.sig.TriggerReceive(ctx); err != nil {
+				if isAlreadyReceivingError(err) {
+					log.Println("[SyncEngine] Signal daemon is already actively receiving messages (connection is healthy).")
+				} else {
+					log.Printf("[SyncEngine] Periodic Signal receive trigger failed: %v", err)
+				}
+			}
+		}
+	}
 }
 
 func (s *SyncEngine) listenWhatsApp(ctx context.Context) {
@@ -68,9 +188,21 @@ func (s *SyncEngine) listenWhatsApp(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case msg := <-s.waClient.incomingEvents:
-			// Discard messages sent by self to avoid infinite loops
-			if msg.Info.IsFromMe {
+			// Discard messages sent by the sync engine itself to prevent loops
+			if s.isWASent(msg.Info.ID) {
+				log.Printf("[Sync WhatsApp -> Signal] Discarding message sent by self: %s", msg.Info.ID)
 				continue
+			}
+
+			// Discard messages sent by self on their phone, EXCEPT if it is in a linked group
+			if msg.Info.IsFromMe {
+				isLinked := false
+				if msg.Info.IsGroup {
+					_, isLinked = s.cfg.GroupLinks[msg.Info.Chat.String()]
+				}
+				if !isLinked {
+					continue
+				}
 			}
 
 			// Discard status messages / broadcast messages
@@ -84,7 +216,16 @@ func (s *SyncEngine) listenWhatsApp(ctx context.Context) {
 }
 
 func (s *SyncEngine) handleWhatsAppMessage(ctx context.Context, msg *events.Message) {
-	log.Printf("[Sync WhatsApp -> Signal] Received message JID: %s, Sender: %s", msg.Info.Chat.String(), msg.Info.Sender.String())
+	msgTime := msg.Info.Timestamp.Unix()
+	s.stateMu.Lock()
+	if s.state != nil && msgTime <= s.state.LastWhatsAppTimestamp {
+		s.stateMu.Unlock()
+		log.Printf("[Sync WhatsApp -> Signal] Discarding message older than last sync timestamp (msg: %d, last: %d)", msgTime, s.state.LastWhatsAppTimestamp)
+		return
+	}
+	s.stateMu.Unlock()
+
+	log.Printf("[Sync WhatsApp -> Signal] Received message JID: %s, Sender: %s, ID: %s", msg.Info.Chat.String(), msg.Info.Sender.String(), msg.Info.ID)
 
 	// Extract message text and media
 	var text string
@@ -148,10 +289,31 @@ func (s *SyncEngine) handleWhatsAppMessage(ctx context.Context, msg *events.Mess
 			isReply = true
 			log.Printf("[Sync WhatsApp -> Signal] Detected reply to Signal Direct number: %s", sigNum)
 		} else if sigGroupID := parsePrefix(quotedText, "[Signal Group: ", "]"); sigGroupID != "" {
-			signalGroup = sigGroupID
-			formattedText = text // send raw reply
-			isReply = true
-			log.Printf("[Sync WhatsApp -> Signal] Detected reply to Signal Group ID: %s", sigGroupID)
+			// Check if this Signal group is linked!
+			isLinked := false
+			for _, targetSigID := range s.cfg.GroupLinks {
+				if targetSigID == sigGroupID {
+					isLinked = true
+					break
+				}
+			}
+
+			if isLinked {
+				signalGroup = sigGroupID
+				formattedText = text // send raw reply
+				isReply = true
+				log.Printf("[Sync WhatsApp -> Signal] Detected reply to linked Signal Group ID: %s", sigGroupID)
+			} else {
+				// Unlinked! Fail the reply and route back to personal account with warning header
+				if s.personalSignalGroupID != "" {
+					signalGroup = s.personalSignalGroupID
+				} else {
+					signalRecipient = s.cfg.Accounts.SignalNumber
+				}
+				formattedText = fmt.Sprintf("[Signal Group Reply Failed] Could not reply to unlinked Signal group %s. Your reply: %s", sigGroupID, text)
+				isReply = true
+				log.Printf("[Sync WhatsApp -> Signal] Blocked reply to unlinked Signal Group ID: %s", sigGroupID)
+			}
 		}
 	}
 
@@ -186,11 +348,24 @@ func (s *SyncEngine) handleWhatsAppMessage(ctx context.Context, msg *events.Mess
 
 	// Send to Signal
 	if signalRecipient != "" || signalGroup != "" {
-		err := s.sig.SendMessage(ctx, signalRecipient, signalGroup, formattedText, attachments)
+		sentTime, err := s.sig.SendMessage(ctx, signalRecipient, signalGroup, formattedText, attachments)
 		if err != nil {
 			log.Printf("Failed to forward WhatsApp message to Signal: %v", err)
 		} else {
 			log.Printf("Forwarded WhatsApp message to Signal successfully.")
+			if sentTime > 0 {
+				s.addSigSentTime(sentTime)
+			}
+
+			// Update state
+			s.stateMu.Lock()
+			if s.state != nil {
+				s.state.LastWhatsAppTimestamp = msgTime
+				if err := SaveState(s.stateFilePath, s.state); err != nil {
+					log.Printf("[SyncEngine] Failed to save state: %v", err)
+				}
+			}
+			s.stateMu.Unlock()
 		}
 	}
 }
@@ -216,10 +391,29 @@ func (s *SyncEngine) listenSignal(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case event := <-s.sig.incomingEvents:
-			// Discard messages sent by self
-			if event.Envelope.SourceNumber == s.cfg.Accounts.SignalNumber {
+			// Discard messages sent by the sync engine itself to prevent loops
+			if s.isSigSent(event.Envelope.Timestamp) {
+				log.Printf("[Sync Signal -> WhatsApp] Discarding message sent by self: %d", event.Envelope.Timestamp)
 				continue
 			}
+
+			// Discard messages sent by self on their phone, EXCEPT if it is in a linked group
+			if event.Envelope.SourceNumber == s.cfg.Accounts.SignalNumber {
+				isLinked := false
+				if event.Envelope.DataMessage != nil && event.Envelope.DataMessage.GroupInfo != nil {
+					sigGroupID := event.Envelope.DataMessage.GroupInfo.GroupID
+					for _, targetSigID := range s.cfg.GroupLinks {
+						if targetSigID == sigGroupID {
+							isLinked = true
+							break
+						}
+					}
+				}
+				if !isLinked {
+					continue
+				}
+			}
+
 			if event.Envelope.DataMessage == nil {
 				continue
 			}
@@ -230,6 +424,15 @@ func (s *SyncEngine) listenSignal(ctx context.Context) {
 }
 
 func (s *SyncEngine) handleSignalMessage(ctx context.Context, event *SignalMessageEvent) {
+	msgTime := event.Envelope.Timestamp / 1000
+	s.stateMu.Lock()
+	if s.state != nil && msgTime <= s.state.LastSignalTimestamp {
+		s.stateMu.Unlock()
+		log.Printf("[Sync Signal -> WhatsApp] Discarding message older than last sync timestamp (msg: %d, last: %d)", msgTime, s.state.LastSignalTimestamp)
+		return
+	}
+	s.stateMu.Unlock()
+
 	msg := event.Envelope.DataMessage
 	log.Printf("[Sync Signal -> WhatsApp] Received message from Source: %s, Msg: %s", event.Envelope.SourceNumber, msg.Message)
 
@@ -265,10 +468,20 @@ func (s *SyncEngine) handleSignalMessage(ctx context.Context, event *SignalMessa
 		} else if waGroupIDStr := parsePrefix(quotedText, "[WhatsApp Group: ", "]"); waGroupIDStr != "" {
 			targetJID, err := ParseWhatsAppJID(waGroupIDStr)
 			if err == nil {
-				whatsappTarget = targetJID
-				formattedText = msg.Message // send raw reply
-				isReply = true
-				log.Printf("[Sync Signal -> WhatsApp] Detected reply to WhatsApp Group JID: %s", waGroupIDStr)
+				// Check if this WhatsApp group is linked!
+				_, linked := s.cfg.GroupLinks[targetJID.String()]
+				if linked {
+					whatsappTarget = targetJID
+					formattedText = msg.Message // send raw reply
+					isReply = true
+					log.Printf("[Sync Signal -> WhatsApp] Detected reply to linked WhatsApp Group JID: %s", waGroupIDStr)
+				} else {
+					// Unlinked! Fail the reply and route back to personal account with warning header
+					whatsappTarget = JID{Raw: s.cfg.Accounts.WhatsAppUserJID, IsGroup: false}
+					formattedText = fmt.Sprintf("[WhatsApp Group Reply Failed] Could not reply to unlinked WhatsApp group %s. Your reply: %s", waGroupIDStr, msg.Message)
+					isReply = true
+					log.Printf("[Sync Signal -> WhatsApp] Blocked reply to unlinked WhatsApp Group JID: %s", waGroupIDStr)
+				}
 			}
 		}
 	}
@@ -304,6 +517,8 @@ func (s *SyncEngine) handleSignalMessage(ctx context.Context, event *SignalMessa
 	}
 
 	// Check for attachments (images/video)
+	hasAttachmentsFailed := false
+	var sentID string
 	if len(msg.Attachments) > 0 {
 		for _, attachment := range msg.Attachments {
 			// Check if it is an image or video
@@ -314,27 +529,50 @@ func (s *SyncEngine) handleSignalMessage(ctx context.Context, event *SignalMessa
 				data, err := os.ReadFile(attachment.StoredFilename)
 				if err != nil {
 					log.Printf("Failed to read Signal attachment: %v", err)
-					_ = s.waClient.SendTextMessage(ctx, whatsappTarget, fmt.Sprintf("[Signal attachment forward failed: %v]", err))
+					_, _ = s.waClient.SendTextMessage(ctx, whatsappTarget, fmt.Sprintf("[Signal attachment forward failed: %v]", err))
+					hasAttachmentsFailed = true
 					continue
 				}
 
-				err = s.waClient.SendMediaMessage(ctx, whatsappTarget, data, attachment.ContentType, isVideo, formattedText)
+				sentID, err = s.waClient.SendMediaMessage(ctx, whatsappTarget, data, attachment.ContentType, isVideo, formattedText)
 				if err != nil {
 					log.Printf("Failed to forward Signal media message: %v", err)
+					hasAttachmentsFailed = true
+				} else {
+					if sentID != "" {
+						s.addWASentID(sentID)
+					}
 				}
 			} else {
 				// Unsupported attachment type, notify user
-				_ = s.waClient.SendTextMessage(ctx, whatsappTarget, fmt.Sprintf("%s\n[Signal received an unsupported attachment type (%s). Check your personal Signal.]", formattedText, attachment.ContentType))
+				_, _ = s.waClient.SendTextMessage(ctx, whatsappTarget, fmt.Sprintf("%s\n[Signal received an unsupported attachment type (%s). Check your personal Signal.]", formattedText, attachment.ContentType))
 			}
 		}
 	} else {
 		// Simple text message forwarding
-		err := s.waClient.SendTextMessage(ctx, whatsappTarget, formattedText)
+		var err error
+		sentID, err = s.waClient.SendTextMessage(ctx, whatsappTarget, formattedText)
 		if err != nil {
 			log.Printf("Failed to forward Signal message to WhatsApp: %v", err)
+			hasAttachmentsFailed = true
 		} else {
 			log.Printf("Forwarded Signal message to WhatsApp successfully.")
+			if sentID != "" {
+				s.addWASentID(sentID)
+			}
 		}
+	}
+
+	// Update state only if forwarding succeeded
+	if !hasAttachmentsFailed {
+		s.stateMu.Lock()
+		if s.state != nil {
+			s.state.LastSignalTimestamp = msgTime
+			if err := SaveState(s.stateFilePath, s.state); err != nil {
+				log.Printf("[SyncEngine] Failed to save state: %v", err)
+			}
+		}
+		s.stateMu.Unlock()
 	}
 }
 
@@ -374,4 +612,11 @@ func getQuotedMessageText(msg *events.Message) string {
 		return qm.VideoMessage.GetCaption()
 	}
 	return ""
+}
+
+func isAlreadyReceivingError(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(err.Error(), "already being received")
 }

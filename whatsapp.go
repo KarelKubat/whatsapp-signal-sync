@@ -128,7 +128,7 @@ func (w *WhatsAppClient) eventHandler(evt interface{}) {
 	}
 }
 
-func (w *WhatsAppClient) SendTextMessage(ctx context.Context, to JID, text string) error {
+func (w *WhatsAppClient) SendTextMessage(ctx context.Context, to JID, text string) (string, error) {
 	var targetJID types.JID
 	var err error
 	if to.IsGroup {
@@ -137,21 +137,24 @@ func (w *WhatsAppClient) SendTextMessage(ctx context.Context, to JID, text strin
 		targetJID, err = types.ParseJID(to.String())
 	}
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	msg := &waE2E.Message{
 		Conversation: proto.String(text),
 	}
 
-	_, err = w.client.SendMessage(ctx, targetJID, msg)
-	return err
+	resp, err := w.client.SendMessage(ctx, targetJID, msg)
+	if err != nil {
+		return "", err
+	}
+	return resp.ID, nil
 }
 
-func (w *WhatsAppClient) SendMediaMessage(ctx context.Context, to JID, data []byte, mimeType string, isVideo bool, caption string) error {
+func (w *WhatsAppClient) SendMediaMessage(ctx context.Context, to JID, data []byte, mimeType string, isVideo bool, caption string) (string, error) {
 	targetJID, err := types.ParseJID(to.String())
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	var mediaType whatsmeow.MediaType
@@ -163,7 +166,7 @@ func (w *WhatsAppClient) SendMediaMessage(ctx context.Context, to JID, data []by
 
 	uploadResp, err := w.client.Upload(ctx, data, mediaType)
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	var msg *waE2E.Message
@@ -195,8 +198,11 @@ func (w *WhatsAppClient) SendMediaMessage(ctx context.Context, to JID, data []by
 		}
 	}
 
-	_, err = w.client.SendMessage(ctx, targetJID, msg)
-	return err
+	resp, err := w.client.SendMessage(ctx, targetJID, msg)
+	if err != nil {
+		return "", err
+	}
+	return resp.ID, nil
 }
 
 func (w *WhatsAppClient) DownloadMedia(ctx context.Context, msg whatsmeow.DownloadableMessage) ([]byte, error) {

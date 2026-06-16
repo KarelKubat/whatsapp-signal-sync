@@ -299,11 +299,19 @@ func (s *SignalClient) sendRequest(ctx context.Context, method string, params in
 	}
 }
 
+func (s *SignalClient) TriggerReceive(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	_, err := s.sendRequest(ctx, "receive", struct{}{})
+	return err
+}
+
 func (s *SignalClient) ListGroups(ctx context.Context) ([]SignalGroup, error) {
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 
-	result, err := s.sendRequest(ctx, "listGroups", nil)
+	result, err := s.sendRequest(ctx, "listGroups", struct{}{})
 	if err != nil {
 		return nil, err
 	}
@@ -322,7 +330,14 @@ type SendParams struct {
 	Attachments []string `json:"attachments,omitempty"`
 }
 
-func (s *SignalClient) SendMessage(ctx context.Context, recipient, group, message string, attachments []string) error {
+type SendResponse struct {
+	Results []struct {
+		Recipient string `json:"recipient"`
+		Timestamp int64  `json:"timestamp"`
+	} `json:"results"`
+}
+
+func (s *SignalClient) SendMessage(ctx context.Context, recipient, group, message string, attachments []string) (int64, error) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
@@ -335,11 +350,19 @@ func (s *SignalClient) SendMessage(ctx context.Context, recipient, group, messag
 	} else if recipient != "" {
 		params.Recipient = recipient
 	} else {
-		return errors.New("must specify either recipient or group")
+		return 0, errors.New("must specify either recipient or group")
 	}
 
-	_, err := s.sendRequest(ctx, "send", params)
-	return err
+	result, err := s.sendRequest(ctx, "send", params)
+	if err != nil {
+		return 0, err
+	}
+
+	var resp SendResponse
+	if err := json.Unmarshal(result, &resp); err == nil && len(resp.Results) > 0 {
+		return resp.Results[0].Timestamp, nil
+	}
+	return 0, nil
 }
 
 // Helper to Link Device as secondary device and return the URI QR code channel

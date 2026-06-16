@@ -12,19 +12,22 @@ A self-contained CLI utility designed to automatically synchronize your personal
 
 ![But Why](butwhy.png)
 
-I am member of a WhatsApp family group where lots of people hang out, because there is too much inertial mass to switch to Signal. Some people however do prefer Signal - so - would it not be nice to have two worlds? Group members on the one platform would see messages on the other platform too, and vice versa.
+I am member of a WhatsApp family group where lots of people hang out, despite that many are not happy about it. There is just too much inertial mass to switch to Signal. So most of the members end up being on WhatsApp "just because of that group". 
 
-And thus the idea for `whatsapp-signal-sync` was born.
+Some people however strongly prefer Signal - so - would it not be nice to have two worlds? Group members on the one platform would see messages on the other platform too, and vice versa.
+
+And thus the idea for `whatsapp-signal-sync` was born. It allows the folks who want to be on Signal (who are mostly more tech-savvy anyway) to run a syncer on their favorite Linux box, or on a Raspberry Pi, or on a little Mac mini. The less tech-savvy can stay on WhatsApp. With this setup, no one has to sacrifice their preferred platform.
 
 ### Key Features:
 - **Two-way Syncing**: Messages sent or received on WhatsApp are forwarded to Signal, and vice versa.
 - **Group linking**: Connects specific WhatsApp groups to corresponding Signal groups to mirror group messages.
-- **Direct Message Redirection & Replies**:
-  - Direct messages are forwarded directly. 
-  - **Replying (quoting)** a forwarded message in your chat on either Signal or WhatsApp automatically routes your message back to the original sender on the opposite platform!
-- **Clean Signal Group Integration**: If you create a Signal group named `"Whatsapp Signal Sync"`, the program automatically detects it and forwards all direct/personal messages there instead of polluting your personal `Note to Self` chat.
-- **Fallback for Unlinked Groups**: Messages received in unlinked groups are safely forwarded to your personal channel with the source group details (allowing you to reply to the group).
+- **Message Redirection & Replies**:
+  - Direct and group messages are automatically synced between linked accounts/groups.
+  - **Replying (quoting)** a forwarded message in your chat on either Signal or WhatsApp automatically routes your reply back to the correct recipient or mapped group on the opposite platform.
+  - **Unlinked Group Safety**: If you reply to a message from an unlinked group, the syncer blocks the reply from being sent to the other group, and instead redirects it to your personal account on the other side prefixed with a `[Group Reply Failed]` warning.
+- **Clean Signal Group Integration**: If you create a Signal group named `"Whatsapp Signal Sync"`, the program automatically detects it and forwards all direct/personal and unlinked group messages there instead of polluting your personal `Note to Self` chat.
 - **Media Support**: Automatically downloads and transfers images and videos in transit.
+- **Historical Catch-up Sync**: Remembers where it left off by saving its synchronization state in `./data/state.json`. If the daemon is stopped or suffers a network blackout, it automatically pulls and syncs any missed messages upon startup and re-triggers polling every 5 minutes.
 - **Safe Fallbacks**: Unsupported messages (like polls) are replaced with a clear text placeholder notifying you to check the original message on the source platform.
 
 ---
