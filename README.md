@@ -8,6 +8,14 @@ A self-contained CLI utility designed to automatically synchronize your personal
 
 `whatsapp-signal-sync` is a bridging program written in Go that acts as a real-time forwarder between your WhatsApp and Signal accounts. 
 
+### But why?
+
+![But Why](butwhy.png)
+
+I am member of a WhatsApp family group where lots of people hang out, because there is too much inertial mass to switch to Signal. Some people however do prefer Signal - so - would it not be nice to have two worlds? Group members on the one platform would see messages on the other platform too, and vice versa.
+
+And thus the idea for `whatsapp-signal-sync` was born.
+
 ### Key Features:
 - **Two-way Syncing**: Messages sent or received on WhatsApp are forwarded to Signal, and vice versa.
 - **Group linking**: Connects specific WhatsApp groups to corresponding Signal groups to mirror group messages.
@@ -45,6 +53,8 @@ whatsapp-signal-sync -setup
 - It will go through each WhatsApp group one-by-one and ask you to enter the number of the corresponding Signal group to link them together.
 - Enter the number of the matching Signal group, or press `s` to skip mapping (unlinked group messages will default to personal forwarding), or `d` if you are done.
 - The mapping is saved to `./data/config.yaml`.
+
+You can re-link groups anytime by re-running `whatsapp-signal-sync -setup`. The program will not ask you again to re-login. If you want to re-login, you have to delete the ./data/whatsapp.db file.
 
 ### Step 2.3: Running the Daemon
 To start the real-time sync engine, run the program without flags:
@@ -101,7 +111,7 @@ storage:
   whatsapp_db: "./data/whatsapp.db"
   signal_config_dir: "./data/signal"
   temp_attachment_dir: "./data/tmp"
-  signal_cli_path: "signal-cli"              # Path to signal-cli executable (supports absolute paths)
+  signal_cli_path: "signal-cli" # Path to signal-cli (supports absolute paths)
 
 accounts:
   signal_number: "+1234567890"
