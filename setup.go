@@ -33,12 +33,7 @@ func RunSetup(ctx context.Context, cfgPath string, cfg *Config, waClient *WhatsA
 		return nil
 	}
 
-	// Print Signal groups for reference
-	fmt.Println("--- Available Signal Groups ---")
-	for i, g := range sigGroups {
-		fmt.Printf("[%d] Name: %s (ID: %s)\n", i+1, g.Name, g.ID)
-	}
-	fmt.Println("-------------------------------\n")
+	printSignalGroups(sigGroups)
 
 	scanner := bufio.NewScanner(os.Stdin)
 
@@ -60,7 +55,7 @@ func RunSetup(ctx context.Context, cfgPath string, cfg *Config, waClient *WhatsA
 		fmt.Printf("  Current Link: %s\n", currentMappingName)
 
 		for {
-			fmt.Printf("Link to Signal group # (or 's' to skip/for personal forward, 'd' if done): ")
+			fmt.Printf("Link to Signal group # (or 's' to skip, 'l' to list, 'd' if done): ")
 			if !scanner.Scan() {
 				break
 			}
@@ -73,6 +68,11 @@ func RunSetup(ctx context.Context, cfgPath string, cfg *Config, waClient *WhatsA
 				delete(cfg.GroupLinks, waGrp.JID.String())
 				fmt.Println("-> Unlinked / set to personal forward.")
 				break
+			}
+
+			if strings.ToLower(input) == "l" {
+				printSignalGroups(sigGroups)
+				continue
 			}
 
 			if strings.ToLower(input) == "d" {
@@ -101,4 +101,12 @@ SaveAndExit:
 	}
 	fmt.Println("Configuration saved successfully!")
 	return nil
+}
+
+func printSignalGroups(sigGroups []SignalGroup) {
+	fmt.Println("\n--- Available Signal Groups ---")
+	for i, g := range sigGroups {
+		fmt.Printf("[%d] Name: %s (ID: %s)\n", i+1, g.Name, g.ID)
+	}
+	fmt.Println("-------------------------------\n")
 }
