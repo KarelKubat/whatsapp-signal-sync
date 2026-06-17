@@ -26,7 +26,7 @@ And thus the idea for `whatsapp-signal-sync` was born. It allows the folks who w
   - **Replying (quoting)** a forwarded message in your chat on either Signal or WhatsApp automatically routes your reply back to the correct recipient or mapped group on the opposite platform.
   - **Unlinked Group Safety**: If you reply to a message from an unlinked group, the syncer blocks the reply from being sent to the other group, and instead redirects it to your personal account on the other side prefixed with a `[Group Reply Failed]` warning.
 - **Clean Signal Group Integration**: If you create a Signal group named `"Whatsapp Signal Sync"`, the program automatically detects it and forwards all direct/personal and unlinked group messages there instead of polluting your personal `Note to Self` chat.
-- **Media Support**: Automatically downloads and transfers images and videos in transit.
+- **Media Support**: Automatically downloads and transfers audio, images and videos in transit.
 - **Historical Catch-up Sync**: Remembers where it left off by saving its synchronization state in `./data/state.json`. If the daemon is stopped or suffers a network blackout, it automatically pulls and syncs any missed messages upon startup and re-triggers polling every 5 minutes.
 - **Safe Fallbacks**: Unsupported messages (like polls) are replaced with a clear text placeholder notifying you to check the original message on the source platform.
 
@@ -54,10 +54,10 @@ whatsapp-signal-sync -setup
 ### Step 2.2: Interactive Group Linking
 - After both accounts are linked, the program will fetch all groups you belong to on both WhatsApp and Signal.
 - It will go through each WhatsApp group one-by-one and ask you to enter the number of the corresponding Signal group to link them together.
-- Enter the number of the matching Signal group, or press `s` to skip mapping (unlinked group messages will default to personal forwarding), or `d` if you are done.
+- Enter the number of the matching Signal group, or press `s` to skip mapping (unlinked group messages will default to personal forwarding), or `d` if you are done (or `l` to see the list of available Signal groups).
 - The mapping is saved to `./data/config.yaml`.
 
-You can re-link groups anytime by re-running `whatsapp-signal-sync -setup`. The program will not ask you again to re-login. If you want to re-login, you have to delete the ./data/whatsapp.db file.
+You can re-link groups anytime by re-running `whatsapp-signal-sync -setup`. The program will not ask you again to re-login. If you want to re-login, you have to delete the `./data/whatsapp.db` file.
 
 ### Step 2.3: Running the Daemon
 To start the real-time sync engine, run the program without flags:
