@@ -194,17 +194,6 @@ func (s *SyncEngine) listenWhatsApp(ctx context.Context) {
 				continue
 			}
 
-			// Discard messages sent by self on their phone, EXCEPT if it is in a linked group
-			if msg.Info.IsFromMe {
-				isLinked := false
-				if msg.Info.IsGroup {
-					_, isLinked = s.cfg.GroupLinks[msg.Info.Chat.String()]
-				}
-				if !isLinked {
-					continue
-				}
-			}
-
 			// Discard status messages / broadcast messages
 			if msg.Info.Chat.Server == "broadcast" {
 				continue
@@ -318,6 +307,17 @@ func (s *SyncEngine) handleWhatsAppMessage(ctx context.Context, msg *events.Mess
 	}
 
 	if !isReply {
+		if msg.Info.IsFromMe {
+			isLinkedGroup := false
+			if msg.Info.IsGroup {
+				_, isLinkedGroup = s.cfg.GroupLinks[msg.Info.Chat.String()]
+			}
+			if !isLinkedGroup {
+				log.Printf("[Sync WhatsApp -> Signal] Discarding non-reply message from self in non-linked chat: Chat JID: %s, ID: %s", msg.Info.Chat.String(), msg.Info.ID)
+				return
+			}
+		}
+
 		if msg.Info.IsGroup {
 			// Group message forwarding
 			waGroupID := msg.Info.Chat.String()
@@ -392,29 +392,17 @@ func (s *SyncEngine) listenSignal(ctx context.Context) {
 			return
 		case event := <-s.sig.incomingEvents:
 			// Discard messages sent by the sync engine itself to prevent loops
-			if s.isSigSent(event.Envelope.Timestamp) {
-				log.Printf("[Sync Signal -> WhatsApp] Discarding message sent by self: %d", event.Envelope.Timestamp)
+			if s.isSigSent(event.Params.Envelope.Timestamp) {
+				log.Printf("[Sync Signal -> WhatsApp] Discarding message sent by self: %d", event.Params.Envelope.Timestamp)
 				continue
 			}
 
-			// Discard messages sent by self on their phone, EXCEPT if it is in a linked group
-			if event.Envelope.SourceNumber == s.cfg.Accounts.SignalNumber {
-				isLinked := false
-				if event.Envelope.DataMessage != nil && event.Envelope.DataMessage.GroupInfo != nil {
-					sigGroupID := event.Envelope.DataMessage.GroupInfo.GroupID
-					for _, targetSigID := range s.cfg.GroupLinks {
-						if targetSigID == sigGroupID {
-							isLinked = true
-							break
-						}
-					}
-				}
-				if !isLinked {
-					continue
-				}
+			msgContent := event.Params.Envelope.DataMessage
+			if msgContent == nil && event.Params.Envelope.SyncMessage != nil {
+				msgContent = event.Params.Envelope.SyncMessage.SentMessage
 			}
 
-			if event.Envelope.DataMessage == nil {
+			if msgContent == nil {
 				continue
 			}
 
@@ -424,7 +412,7 @@ func (s *SyncEngine) listenSignal(ctx context.Context) {
 }
 
 func (s *SyncEngine) handleSignalMessage(ctx context.Context, event *SignalMessageEvent) {
-	msgTime := event.Envelope.Timestamp / 1000
+	msgTime := event.Params.Envelope.Timestamp / 1000
 	s.stateMu.Lock()
 	if s.state != nil && msgTime <= s.state.LastSignalTimestamp {
 		s.stateMu.Unlock()
@@ -433,20 +421,23 @@ func (s *SyncEngine) handleSignalMessage(ctx context.Context, event *SignalMessa
 	}
 	s.stateMu.Unlock()
 
-	msg := event.Envelope.DataMessage
-	log.Printf("[Sync Signal -> WhatsApp] Received message from Source: %s, Msg: %s", event.Envelope.SourceNumber, msg.Message)
+	msg := event.Params.Envelope.DataMessage
+	if msg == nil && event.Params.Envelope.SyncMessage != nil {
+		msg = event.Params.Envelope.SyncMessage.SentMessage
+	}
+	log.Printf("[Sync Signal -> WhatsApp] Received message from Source: %s, Msg: %s", event.Params.Envelope.SourceNumber, msg.Message)
 
 	// Discard empty text messages without attachments
 	if msg.Message == "" && len(msg.Attachments) == 0 {
 		return
 	}
 
-	senderName := event.Envelope.SourceName
+	senderName := event.Params.Envelope.SourceName
 	if senderName == "" {
-		senderName = event.Envelope.SourceNumber
+		senderName = event.Params.Envelope.SourceNumber
 	}
 	if senderName == "" {
-		senderName = event.Envelope.SourceUUID
+		senderName = event.Params.Envelope.SourceUUID
 	}
 
 	// Prepare JID target
@@ -487,6 +478,23 @@ func (s *SyncEngine) handleSignalMessage(ctx context.Context, event *SignalMessa
 	}
 
 	if !isReply {
+		if event.Params.Envelope.SourceNumber == s.cfg.Accounts.SignalNumber {
+			isLinkedGroup := false
+			if msg.GroupInfo != nil && msg.GroupInfo.GroupID != "" {
+				sigGroupID := msg.GroupInfo.GroupID
+				for _, targetSigID := range s.cfg.GroupLinks {
+					if targetSigID == sigGroupID {
+						isLinkedGroup = true
+						break
+					}
+				}
+			}
+			if !isLinkedGroup {
+				log.Printf("[Sync Signal -> WhatsApp] Discarding non-reply message from self in non-linked chat: Source: %s", event.Params.Envelope.SourceNumber)
+				return
+			}
+		}
+
 		if msg.GroupInfo != nil && msg.GroupInfo.GroupID != "" {
 			// Group message forwarding
 			sigGroupID := msg.GroupInfo.GroupID
@@ -512,7 +520,7 @@ func (s *SyncEngine) handleSignalMessage(ctx context.Context, event *SignalMessa
 		} else {
 			// Personal message forwarding
 			whatsappTarget = JID{Raw: s.cfg.Accounts.WhatsAppUserJID, IsGroup: false}
-			formattedText = fmt.Sprintf("[Signal Direct: %s] %s: %s", event.Envelope.SourceNumber, senderName, msg.Message)
+			formattedText = fmt.Sprintf("[Signal Direct: %s] %s: %s", event.Params.Envelope.SourceNumber, senderName, msg.Message)
 		}
 	}
 

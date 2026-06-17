@@ -34,37 +34,44 @@ type JSONRPCError struct {
 	Message string `json:"message"`
 }
 
+type SignalMessageContent struct {
+	Timestamp   int64  `json:"timestamp"`
+	Message     string `json:"message"`
+	Quote       *struct {
+		ID     int64  `json:"id"`
+		Author string `json:"author"`
+		Text   string `json:"text"`
+	} `json:"quote"`
+	GroupInfo   *struct {
+		GroupID string              `json:"groupId"`
+		Members []SignalGroupMember `json:"members"`
+		Name    string              `json:"name"`
+		Type    string              `json:"type"`
+	} `json:"groupInfo"`
+	Attachments []struct {
+		ContentType    string `json:"contentType"`
+		Filename       string `json:"filename"`
+		ID             string `json:"id"`
+		Size           int64  `json:"size"`
+		StoredFilename string `json:"storedFilename"`
+	} `json:"attachments"`
+}
+
 type SignalMessageEvent struct {
-	Envelope struct {
-		Source       string `json:"source"`
-		SourceName   string `json:"sourceName"`
-		SourceNumber string `json:"sourceNumber"`
-		SourceUUID   string `json:"sourceUuid"`
-		Timestamp    int64  `json:"timestamp"`
-		DataMessage  *struct {
-			Timestamp   int64  `json:"timestamp"`
-			Message     string `json:"message"`
-			Quote       *struct {
-				ID     int64  `json:"id"`
-				Author string `json:"author"`
-				Text   string `json:"text"`
-			} `json:"quote"`
-			GroupInfo   *struct {
-				GroupID string              `json:"groupId"`
-				Members []SignalGroupMember `json:"members"`
-				Name    string              `json:"name"`
-				Type    string              `json:"type"`
-			} `json:"groupInfo"`
-			Attachments []struct {
-				ContentType    string `json:"contentType"`
-				Filename       string `json:"filename"`
-				ID             string `json:"id"`
-				Size           int64  `json:"size"`
-				StoredFilename string `json:"storedFilename"`
-			} `json:"attachments"`
-		} `json:"dataMessage"`
-	} `json:"envelope"`
-	Account string `json:"account"`
+	Params struct {
+		Envelope struct {
+			Source       string `json:"source"`
+			SourceName   string `json:"sourceName"`
+			SourceNumber string `json:"sourceNumber"`
+			SourceUUID   string `json:"sourceUuid"`
+			Timestamp    int64  `json:"timestamp"`
+			DataMessage  *SignalMessageContent `json:"dataMessage"`
+			SyncMessage  *struct {
+				SentMessage *SignalMessageContent `json:"sentMessage"`
+			} `json:"syncMessage"`
+		} `json:"envelope"`
+		Account string `json:"account"`
+	} `json:"params"`
 }
 
 type SignalGroupMember struct {
