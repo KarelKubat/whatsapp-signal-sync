@@ -8,8 +8,9 @@ import (
 )
 
 type State struct {
-	LastWhatsAppTimestamp int64 `json:"last_whatsapp_timestamp"`
-	LastSignalTimestamp   int64 `json:"last_signal_timestamp"`
+	LastWhatsAppTimestamp int64  `json:"last_whatsapp_timestamp"`
+	LastWhatsAppMsgID     string `json:"last_whatsapp_msg_id"`
+	LastSignalTimestamp   int64  `json:"last_signal_timestamp"`
 }
 
 func LoadState(path string) (*State, error) {
@@ -19,7 +20,7 @@ func LoadState(path string) (*State, error) {
 		now := time.Now().Unix()
 		state := &State{
 			LastWhatsAppTimestamp: now,
-			LastSignalTimestamp:   now,
+			LastSignalTimestamp:   now * 1000,
 		}
 		if errDir := os.MkdirAll(filepath.Dir(path), 0700); errDir != nil {
 			return nil, errDir
@@ -34,6 +35,11 @@ func LoadState(path string) (*State, error) {
 	decoder := json.NewDecoder(file)
 	if err := decoder.Decode(&state); err != nil {
 		return nil, err
+	}
+
+	// Migrate last_signal_timestamp from seconds to milliseconds if needed
+	if state.LastSignalTimestamp < 100000000000 {
+		state.LastSignalTimestamp = state.LastSignalTimestamp * 1000
 	}
 	return &state, nil
 }

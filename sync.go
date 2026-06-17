@@ -192,6 +192,11 @@ func (s *SyncEngine) listenWhatsApp(ctx context.Context) {
 			if s.cfg.Debug {
 				payload, _ := json.MarshalIndent(msg, "", "  ")
 				log.Printf("[DEBUG] WhatsApp Event Received on Channel:\n%s", string(payload))
+				if msg.Message != nil {
+					log.Printf("[DEBUG] Raw msg.Message struct: %+v", msg.Message)
+				} else {
+					log.Printf("[DEBUG] msg.Message is nil")
+				}
 			}
 			// Discard messages sent by the sync engine itself to prevent loops
 			if s.isWASent(msg.Info.ID) {
@@ -212,10 +217,18 @@ func (s *SyncEngine) listenWhatsApp(ctx context.Context) {
 func (s *SyncEngine) handleWhatsAppMessage(ctx context.Context, msg *events.Message) {
 	msgTime := msg.Info.Timestamp.Unix()
 	s.stateMu.Lock()
-	if s.state != nil && msgTime <= s.state.LastWhatsAppTimestamp {
-		s.stateMu.Unlock()
-		log.Printf("[Sync WhatsApp -> Signal] Discarding message older than last sync timestamp (msg: %d, last: %d)", msgTime, s.state.LastWhatsAppTimestamp)
-		return
+	if s.state != nil {
+		isDuplicate := false
+		if msgTime < s.state.LastWhatsAppTimestamp {
+			isDuplicate = true
+		} else if msgTime == s.state.LastWhatsAppTimestamp && msg.Info.ID == s.state.LastWhatsAppMsgID {
+			isDuplicate = true
+		}
+		if isDuplicate {
+			s.stateMu.Unlock()
+			log.Printf("[Sync WhatsApp -> Signal] Discarding duplicate or older message (msgTime: %d, lastTime: %d, msgID: %s, lastID: %s)", msgTime, s.state.LastWhatsAppTimestamp, msg.Info.ID, s.state.LastWhatsAppMsgID)
+			return
+		}
 	}
 	s.stateMu.Unlock()
 
@@ -331,13 +344,13 @@ func (s *SyncEngine) handleWhatsAppMessage(ctx context.Context, msg *events.Mess
 			if linked {
 				signalGroup = sigGroupID
 				if s.cfg.Debug {
-					formattedText = fmt.Sprintf("[WhatsApp Group: %s] %s: %s", waGroupID, senderName, text)
+					formattedText = formatForwardText(fmt.Sprintf("[WhatsApp Group: %s]", waGroupID), senderName, text)
 				} else {
-					formattedText = fmt.Sprintf("%s: %s", senderName, text)
+					formattedText = formatForwardText("", senderName, text)
 				}
 			} else {
 				// Unlinked group, forward to personal account
-				formattedText = fmt.Sprintf("[WhatsApp Group: %s] %s: %s", waGroupID, senderName, text)
+				formattedText = formatForwardText(fmt.Sprintf("[WhatsApp Group: %s]", waGroupID), senderName, text)
 				if s.personalSignalGroupID != "" {
 					signalGroup = s.personalSignalGroupID
 				} else {
@@ -346,7 +359,7 @@ func (s *SyncEngine) handleWhatsAppMessage(ctx context.Context, msg *events.Mess
 			}
 		} else {
 			// Personal message forwarding
-			formattedText = fmt.Sprintf("[WhatsApp Direct: %s] %s: %s", msg.Info.Sender.String(), senderName, text)
+			formattedText = formatForwardText(fmt.Sprintf("[WhatsApp Direct: %s]", msg.Info.Sender.String()), senderName, text)
 			if s.personalSignalGroupID != "" {
 				signalGroup = s.personalSignalGroupID
 			} else {
@@ -373,6 +386,7 @@ func (s *SyncEngine) handleWhatsAppMessage(ctx context.Context, msg *events.Mess
 			s.stateMu.Lock()
 			if s.state != nil {
 				s.state.LastWhatsAppTimestamp = msgTime
+				s.state.LastWhatsAppMsgID = msg.Info.ID
 				if err := SaveState(s.stateFilePath, s.state); err != nil {
 					log.Printf("[SyncEngine] Failed to save state: %v", err)
 				}
@@ -428,11 +442,11 @@ func (s *SyncEngine) listenSignal(ctx context.Context) {
 }
 
 func (s *SyncEngine) handleSignalMessage(ctx context.Context, event *SignalMessageEvent) {
-	msgTime := event.Params.Envelope.Timestamp / 1000
+	msgTimeMs := event.Params.Envelope.Timestamp
 	s.stateMu.Lock()
-	if s.state != nil && msgTime <= s.state.LastSignalTimestamp {
+	if s.state != nil && msgTimeMs <= s.state.LastSignalTimestamp {
 		s.stateMu.Unlock()
-		log.Printf("[Sync Signal -> WhatsApp] Discarding message older than last sync timestamp (msg: %d, last: %d)", msgTime, s.state.LastSignalTimestamp)
+		log.Printf("[Sync Signal -> WhatsApp] Discarding message older than last sync timestamp (msgMs: %d, lastMs: %d)", msgTimeMs, s.state.LastSignalTimestamp)
 		return
 	}
 	s.stateMu.Unlock()
@@ -528,19 +542,19 @@ func (s *SyncEngine) handleSignalMessage(ctx context.Context, event *SignalMessa
 			if isLinked {
 				whatsappTarget = JID{Raw: linkedWAJID, IsGroup: true}
 				if s.cfg.Debug {
-					formattedText = fmt.Sprintf("[Signal Group: %s] %s: %s", sigGroupID, senderName, msg.Message)
+					formattedText = formatForwardText(fmt.Sprintf("[Signal Group: %s]", sigGroupID), senderName, msg.Message)
 				} else {
-					formattedText = fmt.Sprintf("%s: %s", senderName, msg.Message)
+					formattedText = formatForwardText("", senderName, msg.Message)
 				}
 			} else {
 				// Unlinked group, forward to personal contact
 				whatsappTarget = JID{Raw: s.cfg.Accounts.WhatsAppUserJID, IsGroup: false}
-				formattedText = fmt.Sprintf("[Signal Group: %s] %s (in %s): %s", sigGroupID, senderName, msg.GroupInfo.Name, msg.Message)
+				formattedText = formatForwardText(fmt.Sprintf("[Signal Group: %s] %s (in %s)", sigGroupID, senderName, msg.GroupInfo.Name), "", msg.Message)
 			}
 		} else {
 			// Personal message forwarding
 			whatsappTarget = JID{Raw: s.cfg.Accounts.WhatsAppUserJID, IsGroup: false}
-			formattedText = fmt.Sprintf("[Signal Direct: %s] %s: %s", event.Params.Envelope.SourceNumber, senderName, msg.Message)
+			formattedText = formatForwardText(fmt.Sprintf("[Signal Direct: %s]", event.Params.Envelope.SourceNumber), senderName, msg.Message)
 		}
 	}
 
@@ -554,9 +568,17 @@ func (s *SyncEngine) handleSignalMessage(ctx context.Context, event *SignalMessa
 			isImage := strings.HasPrefix(attachment.ContentType, "image/")
 
 			if isImage || isVideo {
-				data, err := os.ReadFile(attachment.StoredFilename)
+				filePath := attachment.StoredFilename
+				if filePath == "" && attachment.ID != "" {
+					filePath = filepath.Join(s.cfg.Storage.SignalConfigDir, "attachments", attachment.ID)
+					if s.cfg.Debug {
+						log.Printf("[DEBUG] StoredFilename was empty. Trying fallback path: %s", filePath)
+					}
+				}
+
+				data, err := os.ReadFile(filePath)
 				if err != nil {
-					log.Printf("Failed to read Signal attachment: %v", err)
+					log.Printf("Failed to read Signal attachment (path: %s): %v", filePath, err)
 					_, _ = s.waClient.SendTextMessage(ctx, whatsappTarget, fmt.Sprintf("[Signal attachment forward failed: %v]", err))
 					hasAttachmentsFailed = true
 					continue
@@ -601,7 +623,7 @@ func (s *SyncEngine) handleSignalMessage(ctx context.Context, event *SignalMessa
 	if !hasAttachmentsFailed {
 		s.stateMu.Lock()
 		if s.state != nil {
-			s.state.LastSignalTimestamp = msgTime
+			s.state.LastSignalTimestamp = msgTimeMs
 			if err := SaveState(s.stateFilePath, s.state); err != nil {
 				log.Printf("[SyncEngine] Failed to save state: %v", err)
 			}
@@ -653,4 +675,15 @@ func isAlreadyReceivingError(err error) bool {
 		return false
 	}
 	return strings.Contains(err.Error(), "already being received")
+}
+
+func formatForwardText(headerPrefix, senderName, messageText string) string {
+	var prefix string
+	if headerPrefix != "" {
+		prefix = headerPrefix + " "
+	}
+	if messageText == "" {
+		return fmt.Sprintf("%s%s", prefix, senderName)
+	}
+	return fmt.Sprintf("%s%s: %s", prefix, senderName, messageText)
 }
