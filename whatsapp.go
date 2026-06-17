@@ -209,6 +209,37 @@ func (w *WhatsAppClient) SendMediaMessage(ctx context.Context, to JID, data []by
 	return resp.ID, nil
 }
 
+func (w *WhatsAppClient) SendAudioMessage(ctx context.Context, to JID, data []byte, mimeType string) (string, error) {
+	targetJID, err := types.ParseJID(to.String())
+	if err != nil {
+		return "", err
+	}
+
+	uploadResp, err := w.client.Upload(ctx, data, whatsmeow.MediaAudio)
+	if err != nil {
+		return "", err
+	}
+
+	msg := &waE2E.Message{
+		AudioMessage: &waE2E.AudioMessage{
+			URL:           proto.String(uploadResp.URL),
+			DirectPath:    proto.String(uploadResp.DirectPath),
+			MediaKey:      uploadResp.MediaKey,
+			Mimetype:      proto.String(mimeType),
+			FileEncSHA256: uploadResp.FileEncSHA256,
+			FileSHA256:    uploadResp.FileSHA256,
+			FileLength:    proto.Uint64(uint64(len(data))),
+			PTT:           proto.Bool(false),
+		},
+	}
+
+	resp, err := w.client.SendMessage(ctx, targetJID, msg)
+	if err != nil {
+		return "", err
+	}
+	return resp.ID, nil
+}
+
 func (w *WhatsAppClient) DownloadMedia(ctx context.Context, msg whatsmeow.DownloadableMessage) ([]byte, error) {
 	return w.client.Download(ctx, msg)
 }

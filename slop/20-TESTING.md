@@ -1,31 +1,31 @@
 # Testing
 
-I received a group message from WhatsApp which is just one line of plain text. This is for a not linked group, so I expect the message to appear in my personal Signal `Note to Self` but it never made it there. Instead I got on my Signal: 
+I received a group message on WhatsApp. This is for a not linked group, so I expect the result to appear in my personal Signal `Note to Self`. But here I only got:
 
 ```
-[WhatsApp Group: 31621222540-1555838023@g.us] Gerrie Meiborg [WhatsApp received a message type that cannot be forwarded. Check your personal WhatsApp.]
+[WhatsApp Group: 31621222540-1555838023@g.us] Annemieke Meiborg: [WhatsApp received a message type that cannot be forwarded. Check your personal WhatsApp.]
 ```
 
 The syncer saw the event and logged (because of `-debug`):
 
 ```
-2026/06/17 14:07:15 [DEBUG] WhatsApp Event Received on Channel:
+2026/06/17 16:09:23 [DEBUG] WhatsApp Event Received on Channel:
 {
   "Info": {
     "Chat": "31621222540-1555838023@g.us",
-    "Sender": "23948821528822@lid",
+    "Sender": "226581117186119@lid",
     "IsFromMe": false,
     "IsGroup": true,
     "AddressingMode": "lid",
-    "SenderAlt": "31610352329@s.whatsapp.net",
+    "SenderAlt": "41792976806@s.whatsapp.net",
     "RecipientAlt": "",
     "BroadcastListOwner": "",
     "BroadcastRecipients": null,
-    "ID": "AC9623C2625FD56AB8C46A86C9FAEE62",
+    "ID": "ACA2C40EB5F7296B0AF8CDDECFC92503",
     "ServerID": 0,
     "Type": "text",
-    "PushName": "Gerrie Meiborg",
-    "Timestamp": "2026-06-17T14:07:14+02:00",
+    "PushName": "Annemieke Meiborg",
+    "Timestamp": "2026-06-17T16:09:23+02:00",
     "Category": "",
     "Multicast": false,
     "MediaType": "",
@@ -47,9 +47,18 @@ The syncer saw the event and logged (because of `-debug`):
     "DeviceSentMeta": null
   },
   "Message": {
-    "conversation": "Ben heel benieuwd hoe zo'n virtuele bal naar binnen glijdt!",
+    "extendedTextMessage": {
+      "text": "@281380638478587 op verzoek van jou een berichtje zodat je je nieuwe software kunt testen 🤓",
+      "previewType": 0,
+      "contextInfo": {
+        "mentionedJID": [
+          "281380638478587@lid"
+        ]
+      },
+      "inviteLinkGroupTypeV2": 0
+    },
     "messageContextInfo": {
-      "messageSecret": "fsNZl3McmfmVnQGZGqM/JpO57IMW56kxNN4VNSUXSJ0=",
+      "messageSecret": "rGvaWon4QppmLthpyyDLeeqodXTaIIR7x7rwmEJl+lw=",
       "limitSharingV2": {
         "sharingLimited": true,
         "trigger": 1,
@@ -71,9 +80,18 @@ The syncer saw the event and logged (because of `-debug`):
   "RetryCount": 0,
   "NewsletterMeta": null,
   "RawMessage": {
-    "conversation": "Ben heel benieuwd hoe zo'n virtuele bal naar binnen glijdt!",
+    "extendedTextMessage": {
+      "text": "@281380638478587 op verzoek van jou een berichtje zodat je je nieuwe software kunt testen 🤓",
+      "previewType": 0,
+      "contextInfo": {
+        "mentionedJID": [
+          "281380638478587@lid"
+        ]
+      },
+      "inviteLinkGroupTypeV2": 0
+    },
     "messageContextInfo": {
-      "messageSecret": "fsNZl3McmfmVnQGZGqM/JpO57IMW56kxNN4VNSUXSJ0=",
+      "messageSecret": "rGvaWon4QppmLthpyyDLeeqodXTaIIR7x7rwmEJl+lw=",
       "limitSharingV2": {
         "sharingLimited": true,
         "trigger": 1,
@@ -83,8 +101,9 @@ The syncer saw the event and logged (because of `-debug`):
     }
   }
 }
+2026/06/17 16:09:23 [DEBUG] Raw msg.Message struct: extendedTextMessage:{text:"@281380638478587 op verzoek van jou een berichtje zodat je je nieuwe software kunt testen 🤓" previewType:NONE contextInfo:{mentionedJID:"281380638478587@lid"} inviteLinkGroupTypeV2:DEFAULT} messageContextInfo:{messageSecret:"\xack\xdaZ\x89\xf8B\x9af.\xd8i\xcb \xcby\xea\xa8ut\xda \x84{Ǻ\xf0\x98Be\xfa\\" limitSharingV2:{sharingLimited:true trigger:CHAT_SETTING limitSharingSettingTimestamp:1781256010119 initiatedByMe:false}}
 ```
 
-Why was the message which is just text not get forwarded as just text?
+Why was the message not forwarded in a better way so I could read it on Signal?
 
 Investigate this, and fix it.

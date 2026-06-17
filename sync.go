@@ -232,12 +232,31 @@ func (s *SyncEngine) handleWhatsAppMessage(ctx context.Context, msg *events.Mess
 	}
 	s.stateMu.Unlock()
 
+	if msg.Message != nil && msg.Message.ProtocolMessage != nil {
+		if s.cfg.Debug {
+			log.Printf("[DEBUG] WhatsApp message contains ProtocolMessage (type: %s), ignoring.", msg.Message.ProtocolMessage.GetType())
+		}
+		return
+	}
+
 	log.Printf("[Sync WhatsApp -> Signal] Received message JID: %s, Sender: %s, ID: %s", msg.Info.Chat.String(), msg.Info.Sender.String(), msg.Info.ID)
 
 	// Extract message text and media
 	var text string
 	var imageMsg *waE2E.ImageMessage
 	var videoMsg *waE2E.VideoMessage
+	var audioMsg *waE2E.AudioMessage
+
+	if s.cfg.Debug {
+		log.Printf("[DEBUG] handleWhatsAppMessage: msg.Message=%+v", msg.Message)
+		log.Printf("[DEBUG] Condition checks: Conversation=%t (GetConversation=%q), ExtendedTextMessage=%t (GetText=%q), AudioMessage=%t",
+			msg.Message.Conversation != nil,
+			msg.Message.GetConversation(),
+			msg.Message.ExtendedTextMessage != nil,
+			msg.Message.GetExtendedTextMessage().GetText(),
+			msg.Message.AudioMessage != nil,
+		)
+	}
 
 	if msg.Message.Conversation != nil {
 		text = msg.Message.GetConversation()
@@ -249,6 +268,9 @@ func (s *SyncEngine) handleWhatsAppMessage(ctx context.Context, msg *events.Mess
 	} else if msg.Message.VideoMessage != nil {
 		videoMsg = msg.Message.VideoMessage
 		text = videoMsg.GetCaption()
+	} else if msg.Message.AudioMessage != nil {
+		audioMsg = msg.Message.AudioMessage
+		text = ""
 	} else {
 		// Fallback for unsupported messages (like Polls)
 		text = "[WhatsApp received a message type that cannot be forwarded. Check your personal WhatsApp.]"
@@ -270,6 +292,21 @@ func (s *SyncEngine) handleWhatsAppMessage(ctx context.Context, msg *events.Mess
 		if err != nil {
 			log.Printf("Failed to download WhatsApp video: %v", err)
 			text = fmt.Sprintf("[WhatsApp video forward failed: %v]", err)
+		} else {
+			attachments = append(attachments, filePath)
+			defer os.Remove(filePath)
+		}
+	} else if audioMsg != nil {
+		ext := ".ogg"
+		if audioMsg.GetMimetype() == "audio/mp4" || audioMsg.GetMimetype() == "audio/aac" {
+			ext = ".m4a"
+		} else if audioMsg.GetMimetype() == "audio/mpeg" {
+			ext = ".mp3"
+		}
+		filePath, err := s.downloadWhatsAppMedia(ctx, audioMsg, "aud_"+uuid.New().String()+ext)
+		if err != nil {
+			log.Printf("Failed to download WhatsApp audio: %v", err)
+			text = fmt.Sprintf("[WhatsApp audio forward failed: %v]", err)
 		} else {
 			attachments = append(attachments, filePath)
 			defer os.Remove(filePath)
@@ -563,11 +600,12 @@ func (s *SyncEngine) handleSignalMessage(ctx context.Context, event *SignalMessa
 	var sentID string
 	if len(msg.Attachments) > 0 {
 		for _, attachment := range msg.Attachments {
-			// Check if it is an image or video
+			// Check if it is an image or video or audio
 			isVideo := strings.HasPrefix(attachment.ContentType, "video/")
 			isImage := strings.HasPrefix(attachment.ContentType, "image/")
+			isAudio := strings.HasPrefix(attachment.ContentType, "audio/")
 
-			if isImage || isVideo {
+			if isImage || isVideo || isAudio {
 				filePath := attachment.StoredFilename
 				if filePath == "" && attachment.ID != "" {
 					filePath = filepath.Join(s.cfg.Storage.SignalConfigDir, "attachments", attachment.ID)
@@ -584,12 +622,20 @@ func (s *SyncEngine) handleSignalMessage(ctx context.Context, event *SignalMessa
 					continue
 				}
 
-				if s.cfg.Debug {
-					log.Printf("[DEBUG] Forwarding media to WhatsApp: target=%+v, MIME=%s, isVideo=%t, text=%q, dataLength=%d", whatsappTarget, attachment.ContentType, isVideo, formattedText, len(data))
+				if isAudio {
+					if s.cfg.Debug {
+						log.Printf("[DEBUG] Forwarding audio to WhatsApp: target=%+v, MIME=%s, dataLength=%d", whatsappTarget, attachment.ContentType, len(data))
+					}
+					sentID, err = s.waClient.SendAudioMessage(ctx, whatsappTarget, data, attachment.ContentType)
+				} else {
+					if s.cfg.Debug {
+						log.Printf("[DEBUG] Forwarding media to WhatsApp: target=%+v, MIME=%s, isVideo=%t, text=%q, dataLength=%d", whatsappTarget, attachment.ContentType, isVideo, formattedText, len(data))
+					}
+					sentID, err = s.waClient.SendMediaMessage(ctx, whatsappTarget, data, attachment.ContentType, isVideo, formattedText)
 				}
-				sentID, err = s.waClient.SendMediaMessage(ctx, whatsappTarget, data, attachment.ContentType, isVideo, formattedText)
+
 				if err != nil {
-					log.Printf("Failed to forward Signal media message: %v", err)
+					log.Printf("Failed to forward Signal media/audio message: %v", err)
 					hasAttachmentsFailed = true
 				} else {
 					if sentID != "" {
