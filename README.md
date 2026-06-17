@@ -66,6 +66,16 @@ whatsapp-signal-sync
 ```
 Keep this process running in your terminal (or run it under a process manager like systemd, launchd, or screen). To stop the sync daemon at any time, press `Ctrl+C`.
 
+You can optionally enable verbose debug mode using the `--debug` flag:
+```bash
+whatsapp-signal-sync --debug
+```
+In debug mode, the syncer will:
+- Print detailed logs about the client setup and connection states.
+- Log the raw JSON payloads of all incoming events received from the WhatsApp and Signal sockets.
+- Log outgoing delivery payloads.
+- Include JID headers (e.g. `[WhatsApp Group: <ID>]` or `[Signal Group: <ID>]`) in the mirrored messages of linked groups (which are otherwise hidden during normal, non-debug operation to keep the chat history clean). Note that direct message and unlinked group message headers are always shown, as they are required to route replies.
+
 ---
 
 ## 3. Compilation & Installation (Sysadmin Guide)

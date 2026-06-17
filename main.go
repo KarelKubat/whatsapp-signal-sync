@@ -19,6 +19,7 @@ import (
 func main() {
 	configPath := flag.String("config", "./data/config.yaml", "Path to YAML configuration file")
 	setupMode := flag.Bool("setup", false, "Run interactive group linking setup and exit")
+	debugMode := flag.Bool("debug", false, "Run in debug mode (verbose logging and headers)")
 	flag.Parse()
 
 	log.Println("Starting WhatsApp-Signal Sync CLI...")
@@ -27,6 +28,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to load configuration: %v", err)
 	}
+	cfg.Debug = *debugMode
 
 	// Clean up temporary attachment directory on startup
 	if cfg.Storage.TempAttachmentDir != "" {
@@ -97,26 +99,47 @@ func main() {
 	}
 
 	// Initialize Clients
+	if cfg.Debug {
+		log.Println("[DEBUG] Initializing WhatsApp and Signal clients...")
+	}
 	waClient := NewWhatsAppClient(cfg.Storage.WhatsAppDB)
+	waClient.Debug = cfg.Debug
 	sigClient := NewSignalClient(cfg.Storage.SignalCLIPath, cfg.Storage.SignalConfigDir, cfg.Accounts.SignalNumber)
+	sigClient.Debug = cfg.Debug
 
 	// Start WhatsApp Client
-	log.Println("Connecting to WhatsApp...")
+	if cfg.Debug {
+		log.Println("[DEBUG] Connecting to WhatsApp (checking DB and device store)...")
+	} else {
+		log.Println("Connecting to WhatsApp...")
+	}
 	if err := waClient.Start(ctx); err != nil {
 		log.Fatalf("Failed to start WhatsApp client: %v", err)
 	}
 	defer waClient.Stop()
-	log.Println("Connected to WhatsApp.")
+	if cfg.Debug {
+		log.Println("[DEBUG] WhatsApp connection established successfully.")
+	} else {
+		log.Println("Connected to WhatsApp.")
+	}
 
 	// Start Signal Client
-	log.Println("Connecting to Signal daemon...")
+	if cfg.Debug {
+		log.Println("[DEBUG] Spawning Signal daemon subprocess with JSON-RPC...")
+	} else {
+		log.Println("Connecting to Signal daemon...")
+	}
 	if err := sigClient.Start(); err != nil {
 		log.Fatalf("Failed to start Signal client: %v", err)
 	}
 	defer func() {
 		_ = sigClient.Stop()
 	}()
-	log.Println("Connected to Signal.")
+	if cfg.Debug {
+		log.Println("[DEBUG] Connected to Signal daemon successfully.")
+	} else {
+		log.Println("Connected to Signal.")
+	}
 
 	if *setupMode {
 		// Run setup linking mode and exit
@@ -128,10 +151,17 @@ func main() {
 	}
 
 	// Start Sync Engine
-	log.Println("Starting synchronization engine...")
+	if cfg.Debug {
+		log.Println("[DEBUG] Initializing synchronization engine and starting listener routines...")
+	} else {
+		log.Println("Starting synchronization engine...")
+	}
 	engine := NewSyncEngine(cfg, waClient, sigClient)
 	engine.Start(ctx)
 	defer engine.Stop()
+	if cfg.Debug {
+		log.Println("[DEBUG] Synchronization loops started. Listening for WhatsApp events and Signal socket notifications.")
+	}
 	log.Println("Synchronization engine is running. Press Ctrl+C to stop.")
 
 	// Capture interrupt signals for graceful termination

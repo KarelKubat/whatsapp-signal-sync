@@ -23,6 +23,7 @@ type Config struct {
 	Storage    StorageConfig     `yaml:"storage"`
 	Accounts   AccountsConfig    `yaml:"accounts"`
 	GroupLinks map[string]string `yaml:"group_links"`
+	Debug      bool              `yaml:"-"`
 }
 
 func DefaultConfig() *Config {

@@ -26,6 +26,7 @@ type WhatsAppClient struct {
 	db             *sqlstore.Container
 	incomingEvents chan *events.Message
 	done           chan struct{}
+	Debug          bool
 }
 
 func NewWhatsAppClient(dbPath string) *WhatsAppClient {
@@ -44,6 +45,9 @@ func (w *WhatsAppClient) Start(ctx context.Context) error {
 
 	// whatsmeow logs can be verbose, use an error logger to silence harmless warnings on shutdown
 	logLevel := "ERROR"
+	if w.Debug {
+		logLevel = "INFO"
+	}
 	dbLog := waLog.Stdout("Database", logLevel, true)
 	clientLog := waLog.Stdout("WhatsAppClient", logLevel, true)
 

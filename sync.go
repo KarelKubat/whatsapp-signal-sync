@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -188,6 +189,10 @@ func (s *SyncEngine) listenWhatsApp(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case msg := <-s.waClient.incomingEvents:
+			if s.cfg.Debug {
+				payload, _ := json.MarshalIndent(msg, "", "  ")
+				log.Printf("[DEBUG] WhatsApp Event Received on Channel:\n%s", string(payload))
+			}
 			// Discard messages sent by the sync engine itself to prevent loops
 			if s.isWASent(msg.Info.ID) {
 				log.Printf("[Sync WhatsApp -> Signal] Discarding message sent by self: %s", msg.Info.ID)
@@ -325,7 +330,11 @@ func (s *SyncEngine) handleWhatsAppMessage(ctx context.Context, msg *events.Mess
 
 			if linked {
 				signalGroup = sigGroupID
-				formattedText = fmt.Sprintf("%s: %s", senderName, text)
+				if s.cfg.Debug {
+					formattedText = fmt.Sprintf("[WhatsApp Group: %s] %s: %s", waGroupID, senderName, text)
+				} else {
+					formattedText = fmt.Sprintf("%s: %s", senderName, text)
+				}
 			} else {
 				// Unlinked group, forward to personal account
 				formattedText = fmt.Sprintf("[WhatsApp Group: %s] %s: %s", waGroupID, senderName, text)
@@ -348,6 +357,9 @@ func (s *SyncEngine) handleWhatsAppMessage(ctx context.Context, msg *events.Mess
 
 	// Send to Signal
 	if signalRecipient != "" || signalGroup != "" {
+		if s.cfg.Debug {
+			log.Printf("[DEBUG] Forwarding to Signal: recipient=%s, group=%s, message=%q, attachments=%v", signalRecipient, signalGroup, formattedText, attachments)
+		}
 		sentTime, err := s.sig.SendMessage(ctx, signalRecipient, signalGroup, formattedText, attachments)
 		if err != nil {
 			log.Printf("Failed to forward WhatsApp message to Signal: %v", err)
@@ -391,6 +403,10 @@ func (s *SyncEngine) listenSignal(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case event := <-s.sig.incomingEvents:
+			if s.cfg.Debug {
+				payload, _ := json.MarshalIndent(event, "", "  ")
+				log.Printf("[DEBUG] Signal Event Received on Socket:\n%s", string(payload))
+			}
 			// Discard messages sent by the sync engine itself to prevent loops
 			if s.isSigSent(event.Params.Envelope.Timestamp) {
 				log.Printf("[Sync Signal -> WhatsApp] Discarding message sent by self: %d", event.Params.Envelope.Timestamp)
@@ -511,7 +527,11 @@ func (s *SyncEngine) handleSignalMessage(ctx context.Context, event *SignalMessa
 
 			if isLinked {
 				whatsappTarget = JID{Raw: linkedWAJID, IsGroup: true}
-				formattedText = fmt.Sprintf("%s: %s", senderName, msg.Message)
+				if s.cfg.Debug {
+					formattedText = fmt.Sprintf("[Signal Group: %s] %s: %s", sigGroupID, senderName, msg.Message)
+				} else {
+					formattedText = fmt.Sprintf("%s: %s", senderName, msg.Message)
+				}
 			} else {
 				// Unlinked group, forward to personal contact
 				whatsappTarget = JID{Raw: s.cfg.Accounts.WhatsAppUserJID, IsGroup: false}
@@ -542,6 +562,9 @@ func (s *SyncEngine) handleSignalMessage(ctx context.Context, event *SignalMessa
 					continue
 				}
 
+				if s.cfg.Debug {
+					log.Printf("[DEBUG] Forwarding media to WhatsApp: target=%+v, MIME=%s, isVideo=%t, text=%q, dataLength=%d", whatsappTarget, attachment.ContentType, isVideo, formattedText, len(data))
+				}
 				sentID, err = s.waClient.SendMediaMessage(ctx, whatsappTarget, data, attachment.ContentType, isVideo, formattedText)
 				if err != nil {
 					log.Printf("Failed to forward Signal media message: %v", err)
@@ -559,6 +582,9 @@ func (s *SyncEngine) handleSignalMessage(ctx context.Context, event *SignalMessa
 	} else {
 		// Simple text message forwarding
 		var err error
+		if s.cfg.Debug {
+			log.Printf("[DEBUG] Forwarding text to WhatsApp: target=%+v, message=%q", whatsappTarget, formattedText)
+		}
 		sentID, err = s.waClient.SendTextMessage(ctx, whatsappTarget, formattedText)
 		if err != nil {
 			log.Printf("Failed to forward Signal message to WhatsApp: %v", err)

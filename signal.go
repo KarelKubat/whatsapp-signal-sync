@@ -100,6 +100,7 @@ type SignalClient struct {
 	pendingRequests map[string]chan *JSONRPCResponse
 	incomingEvents  chan *SignalMessageEvent
 	done            chan struct{}
+	Debug           bool
 }
 
 func NewSignalClient(signalCLIPath, configDir, account string) *SignalClient {
