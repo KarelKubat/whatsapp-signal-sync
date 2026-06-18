@@ -359,9 +359,13 @@ func (s *SyncEngine) handleWhatsAppMessage(ctx context.Context, msg *events.Mess
 		}
 	}
 
-	senderName := msg.Info.PushName
-	if senderName == "" {
-		senderName = msg.Info.Sender.User
+	senderName := s.waClient.ResolveJIDName(ctx, msg.Info.Sender)
+	isNameKnown := senderName != msg.Info.Sender.User
+	if !isNameKnown {
+		if msg.Info.PushName != "" {
+			senderName = msg.Info.PushName
+			isNameKnown = true
+		}
 	}
 
 	// Forwarding targets
@@ -459,7 +463,9 @@ func (s *SyncEngine) handleWhatsAppMessage(ctx context.Context, msg *events.Mess
 			}
 		} else {
 			// Personal message forwarding
-			msgPrefix = fmt.Sprintf("[WhatsApp Direct: %s]", msg.Info.Sender.String())
+			if !isNameKnown {
+				msgPrefix = fmt.Sprintf("[WhatsApp Direct: %s]", msg.Info.Sender.String())
+			}
 			cleanText = formatForwardText("", senderName, text)
 			if s.personalSignalGroupID != "" {
 				signalGroup = s.personalSignalGroupID
@@ -594,6 +600,7 @@ func (s *SyncEngine) handleSignalMessage(ctx context.Context, event *SignalMessa
 	}
 
 	senderName := event.Params.Envelope.SourceName
+	isNameKnown := senderName != "" && senderName != event.Params.Envelope.SourceNumber && senderName != event.Params.Envelope.SourceUUID
 	if senderName == "" {
 		senderName = event.Params.Envelope.SourceNumber
 	}
@@ -707,7 +714,9 @@ func (s *SyncEngine) handleSignalMessage(ctx context.Context, event *SignalMessa
 		} else {
 			// Personal message forwarding
 			whatsappTarget = JID{Raw: s.cfg.Accounts.WhatsAppUserJID, IsGroup: false}
-			msgPrefix = fmt.Sprintf("[Signal Direct: %s]", event.Params.Envelope.SourceNumber)
+			if !isNameKnown {
+				msgPrefix = fmt.Sprintf("[Signal Direct: %s]", event.Params.Envelope.SourceNumber)
+			}
 			cleanText = formatForwardText("", senderName, msg.Message)
 		}
 	}
