@@ -350,39 +350,50 @@ func (s *SyncEngine) handleWhatsAppMessage(ctx context.Context, msg *events.Mess
 	var formattedText string
 
 	// Check if this WhatsApp message is a reply (quote)
-	quotedAuthorJID, quotedTextVal := getQuotedInfo(msg)
+	quotedAuthorJID, quotedTextVal, quotedStanzaID := getQuotedInfo(msg)
 	isReply := false
 	if quotedTextVal != "" {
-		if sigNum := parsePrefix(quotedTextVal, "[Signal Direct: ", "]"); sigNum != "" {
-			signalRecipient = sigNum
+		s.stateMu.Lock()
+		mapping, found := s.state.WhatsAppReplies[quotedStanzaID]
+		s.stateMu.Unlock()
+		if found {
+			signalRecipient = mapping.SignalRecipient
+			signalGroup = mapping.SignalGroup
 			formattedText = text // send raw reply
 			isReply = true
-			log.Printf("[Sync WhatsApp -> Signal] Detected reply to Signal Direct number: %s", sigNum)
-		} else if sigGroupID := parsePrefix(quotedTextVal, "[Signal Group: ", "]"); sigGroupID != "" {
-			// Check if this Signal group is linked!
-			isLinked := false
-			for _, targetSigID := range s.cfg.GroupLinks {
-				if targetSigID == sigGroupID {
-					isLinked = true
-					break
-				}
-			}
-
-			if isLinked {
-				signalGroup = sigGroupID
+			log.Printf("[Sync WhatsApp -> Signal] Detected reply via database lookup. SignalRecipient: %s, SignalGroup: %s", signalRecipient, signalGroup)
+		} else if isSelfJID(quotedAuthorJID, s.cfg.Accounts.WhatsAppUserJID) {
+			if sigNum := parsePrefix(quotedTextVal, "[Signal Direct: ", "]"); sigNum != "" {
+				signalRecipient = sigNum
 				formattedText = text // send raw reply
 				isReply = true
-				log.Printf("[Sync WhatsApp -> Signal] Detected reply to linked Signal Group ID: %s", sigGroupID)
-			} else {
-				// Unlinked! Fail the reply and route back to personal account with warning header
-				if s.personalSignalGroupID != "" {
-					signalGroup = s.personalSignalGroupID
-				} else {
-					signalRecipient = s.cfg.Accounts.SignalNumber
+				log.Printf("[Sync WhatsApp -> Signal] Detected reply to Signal Direct number: %s", sigNum)
+			} else if sigGroupID := parsePrefix(quotedTextVal, "[Signal Group: ", "]"); sigGroupID != "" {
+				// Check if this Signal group is linked!
+				isLinked := false
+				for _, targetSigID := range s.cfg.GroupLinks {
+					if targetSigID == sigGroupID {
+						isLinked = true
+						break
+					}
 				}
-				formattedText = fmt.Sprintf("[Signal Group Reply Failed] Could not reply to unlinked Signal group %s. Your reply: %s", sigGroupID, text)
-				isReply = true
-				log.Printf("[Sync WhatsApp -> Signal] Blocked reply to unlinked Signal Group ID: %s", sigGroupID)
+
+				if isLinked {
+					signalGroup = sigGroupID
+					formattedText = text // send raw reply
+					isReply = true
+					log.Printf("[Sync WhatsApp -> Signal] Detected reply to linked Signal Group ID: %s", sigGroupID)
+				} else {
+					// Unlinked! Fail the reply and route back to personal account with warning header
+					if s.personalSignalGroupID != "" {
+						signalGroup = s.personalSignalGroupID
+					} else {
+						signalRecipient = s.cfg.Accounts.SignalNumber
+					}
+					formattedText = fmt.Sprintf("[Signal Group Reply Failed] Could not reply to unlinked Signal group %s. Your reply: %s", sigGroupID, text)
+					isReply = true
+					log.Printf("[Sync WhatsApp -> Signal] Blocked reply to unlinked Signal Group ID: %s", sigGroupID)
+				}
 			}
 		}
 	}
@@ -463,6 +474,17 @@ func (s *SyncEngine) handleWhatsAppMessage(ctx context.Context, msg *events.Mess
 				}
 				s.state.WhatsAppProcessedIDs[msg.Info.ID] = time.Now().Unix()
 				s.cleanUpWhatsAppProcessedIDs()
+
+				if sentTime > 0 {
+					sigTsKey := fmt.Sprintf("%d", sentTime)
+					s.state.SignalReplies[sigTsKey] = MessageMapping{
+						WhatsAppMsgID:   msg.Info.ID,
+						WhatsAppChatJID: msg.Info.Chat.String(),
+						Timestamp:       time.Now().Unix(),
+					}
+					s.state.CleanUpReplies()
+				}
+
 				if err := SaveState(s.stateFilePath, s.state); err != nil {
 					log.Printf("[SyncEngine] Failed to save state: %v", err)
 				}
@@ -553,31 +575,44 @@ func (s *SyncEngine) handleSignalMessage(ctx context.Context, event *SignalMessa
 
 	// Check if this Signal message is a reply (quote) to a forwarded WhatsApp message
 	if msg.Quote != nil && msg.Quote.Text != "" {
-		quotedText := msg.Quote.Text
-		if waJIDStr := parsePrefix(quotedText, "[WhatsApp Direct: ", "]"); waJIDStr != "" {
-			targetJID, err := ParseWhatsAppJID(waJIDStr)
-			if err == nil {
-				whatsappTarget = targetJID
-				formattedText = msg.Message // send raw reply
-				isReply = true
-				log.Printf("[Sync Signal -> WhatsApp] Detected reply to WhatsApp Direct JID: %s", waJIDStr)
-			}
-		} else if waGroupIDStr := parsePrefix(quotedText, "[WhatsApp Group: ", "]"); waGroupIDStr != "" {
-			targetJID, err := ParseWhatsAppJID(waGroupIDStr)
-			if err == nil {
-				// Check if this WhatsApp group is linked!
-				_, linked := s.cfg.GroupLinks[targetJID.String()]
-				if linked {
+		quotedTimestamp := msg.Quote.ID
+		sigTsKey := fmt.Sprintf("%d", quotedTimestamp)
+		s.stateMu.Lock()
+		mapping, found := s.state.SignalReplies[sigTsKey]
+		s.stateMu.Unlock()
+		if found {
+			isGroup := strings.HasSuffix(mapping.WhatsAppChatJID, "@g.us")
+			whatsappTarget = JID{Raw: mapping.WhatsAppChatJID, IsGroup: isGroup}
+			formattedText = msg.Message // send raw reply
+			isReply = true
+			log.Printf("[Sync Signal -> WhatsApp] Detected reply via database lookup. WhatsAppTarget: %s", mapping.WhatsAppChatJID)
+		} else if msg.Quote.Author == s.cfg.Accounts.SignalNumber {
+			quotedText := msg.Quote.Text
+			if waJIDStr := parsePrefix(quotedText, "[WhatsApp Direct: ", "]"); waJIDStr != "" {
+				targetJID, err := ParseWhatsAppJID(waJIDStr)
+				if err == nil {
 					whatsappTarget = targetJID
 					formattedText = msg.Message // send raw reply
 					isReply = true
-					log.Printf("[Sync Signal -> WhatsApp] Detected reply to linked WhatsApp Group JID: %s", waGroupIDStr)
-				} else {
-					// Unlinked! Fail the reply and route back to personal account with warning header
-					whatsappTarget = JID{Raw: s.cfg.Accounts.WhatsAppUserJID, IsGroup: false}
-					formattedText = fmt.Sprintf("[WhatsApp Group Reply Failed] Could not reply to unlinked WhatsApp group %s. Your reply: %s", waGroupIDStr, msg.Message)
-					isReply = true
-					log.Printf("[Sync Signal -> WhatsApp] Blocked reply to unlinked WhatsApp Group JID: %s", waGroupIDStr)
+					log.Printf("[Sync Signal -> WhatsApp] Detected reply to WhatsApp Direct JID: %s", waJIDStr)
+				}
+			} else if waGroupIDStr := parsePrefix(quotedText, "[WhatsApp Group: ", "]"); waGroupIDStr != "" {
+				targetJID, err := ParseWhatsAppJID(waGroupIDStr)
+				if err == nil {
+					// Check if this WhatsApp group is linked!
+					_, linked := s.cfg.GroupLinks[targetJID.String()]
+					if linked {
+						whatsappTarget = targetJID
+						formattedText = msg.Message // send raw reply
+						isReply = true
+						log.Printf("[Sync Signal -> WhatsApp] Detected reply to linked WhatsApp Group JID: %s", waGroupIDStr)
+					} else {
+						// Unlinked! Fail the reply and route back to personal account with warning header
+						whatsappTarget = JID{Raw: s.cfg.Accounts.WhatsAppUserJID, IsGroup: false}
+						formattedText = fmt.Sprintf("[WhatsApp Group Reply Failed] Could not reply to unlinked WhatsApp group %s. Your reply: %s", waGroupIDStr, msg.Message)
+						isReply = true
+						log.Printf("[Sync Signal -> WhatsApp] Blocked reply to unlinked WhatsApp Group JID: %s", waGroupIDStr)
+					}
 				}
 			}
 		}
@@ -723,6 +758,20 @@ func (s *SyncEngine) handleSignalMessage(ctx context.Context, event *SignalMessa
 		s.stateMu.Lock()
 		if s.state != nil {
 			s.state.LastSignalTimestamp = msgTimeMs
+
+			if sentID != "" {
+				var sigGroupID string
+				if msg.GroupInfo != nil {
+					sigGroupID = msg.GroupInfo.GroupID
+				}
+				s.state.WhatsAppReplies[sentID] = MessageMapping{
+					SignalRecipient: event.Params.Envelope.SourceNumber,
+					SignalGroup:     sigGroupID,
+					Timestamp:       time.Now().Unix(),
+				}
+				s.state.CleanUpReplies()
+			}
+
 			if err := SaveState(s.stateFilePath, s.state); err != nil {
 				log.Printf("[SyncEngine] Failed to save state: %v", err)
 			}
@@ -745,9 +794,9 @@ func parsePrefix(text, patternStart, patternEnd string) string {
 	return text[startIdx : startIdx+endIdx]
 }
 
-func getQuotedInfo(msg *events.Message) (authorJID string, quotedText string) {
+func getQuotedInfo(msg *events.Message) (authorJID string, quotedText string, stanzaID string) {
 	if msg.Message == nil {
-		return "", ""
+		return "", "", ""
 	}
 	var ctxInfo *waE2E.ContextInfo
 	if msg.Message.ExtendedTextMessage != nil {
@@ -761,10 +810,11 @@ func getQuotedInfo(msg *events.Message) (authorJID string, quotedText string) {
 	}
 
 	if ctxInfo == nil || ctxInfo.QuotedMessage == nil {
-		return "", ""
+		return "", "", ""
 	}
 
 	authorJID = ctxInfo.GetParticipant()
+	stanzaID = ctxInfo.GetStanzaID()
 	qm := ctxInfo.QuotedMessage
 	if qm.Conversation != nil {
 		quotedText = qm.GetConversation()
@@ -775,7 +825,7 @@ func getQuotedInfo(msg *events.Message) (authorJID string, quotedText string) {
 	} else if qm.VideoMessage != nil {
 		quotedText = qm.VideoMessage.GetCaption()
 	}
-	return authorJID, quotedText
+	return authorJID, quotedText, stanzaID
 }
 
 func formatQuote(author, text string, selfJID, selfNumber string) string {
@@ -856,4 +906,16 @@ func formatForwardText(headerPrefix, senderName, messageText string) string {
 		return fmt.Sprintf("%s%s", prefix, senderName)
 	}
 	return fmt.Sprintf("%s%s: %s", prefix, senderName, messageText)
+}
+
+func isSelfJID(jid string, selfJID string) bool {
+	cleanJID := jid
+	if parts := strings.Split(jid, "@"); len(parts) > 0 {
+		cleanJID = parts[0]
+	}
+	cleanSelf := selfJID
+	if parts := strings.Split(selfJID, "@"); len(parts) > 0 {
+		cleanSelf = parts[0]
+	}
+	return cleanJID == cleanSelf
 }
