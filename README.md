@@ -12,7 +12,7 @@ A self-contained CLI utility designed to automatically synchronize your personal
 
 ![But Why](butwhy.png)
 
-I am member of a WhatsApp family group where lots of people hang out, despite that many are not happy about it. There is just too much inertial mass to switch to Signal. So most of the members end up being on WhatsApp "just because of that group". 
+I am member of a WhatsApp family group where lots of people hang out, despite that many are not happy about the platform. There is just too much inertial mass to switch to Signal. So most of the members end up being on WhatsApp "just because of that group". 
 
 Some people however strongly prefer Signal - so - would it not be nice to have two worlds? Group members on the one platform would see messages on the other platform too, and vice versa.
 
