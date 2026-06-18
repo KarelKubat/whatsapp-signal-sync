@@ -35,9 +35,12 @@ type JSONRPCError struct {
 }
 
 type SignalMessageContent struct {
-	Timestamp   int64  `json:"timestamp"`
-	Message     string `json:"message"`
-	Quote       *struct {
+	Timestamp         int64  `json:"timestamp"`
+	Message           string `json:"message"`
+	Destination       string `json:"destination,omitempty"`
+	DestinationNumber string `json:"destinationNumber,omitempty"`
+	DestinationUuid   string `json:"destinationUuid,omitempty"`
+	Quote             *struct {
 		ID     int64  `json:"id"`
 		Author string `json:"author"`
 		Text   string `json:"text"`

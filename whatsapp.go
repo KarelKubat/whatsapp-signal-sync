@@ -252,6 +252,14 @@ func (w *WhatsAppClient) GetGroupInfo(ctx context.Context, jid types.JID) (*type
 	return w.client.GetGroupInfo(ctx, jid)
 }
 
+func (w *WhatsAppClient) IsChatArchived(ctx context.Context, jid types.JID) bool {
+	settings, err := w.client.Store.ChatSettings.GetChatSettings(ctx, jid)
+	if err == nil && settings.Found {
+		return settings.Archived
+	}
+	return false
+}
+
 func (w *WhatsAppClient) ResolveJIDName(ctx context.Context, jid types.JID) string {
 	info, err := w.client.Store.Contacts.GetContact(ctx, jid)
 	if err == nil && info.Found {

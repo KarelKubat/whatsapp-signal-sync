@@ -3,15 +3,19 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
+	"database/sql"
+	"encoding/base64"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
+	_ "github.com/mattn/go-sqlite3"
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/proto/waE2E"
 	"go.mau.fi/whatsmeow/types"
@@ -251,6 +255,14 @@ func (s *SyncEngine) handleWhatsAppMessage(ctx context.Context, msg *events.Mess
 		}
 	}
 	s.stateMu.Unlock()
+
+	// Discard messages from archived WhatsApp chats
+	if s.isWhatsAppChatArchived(ctx, msg.Info.Chat.String()) {
+		if s.cfg.Debug {
+			log.Printf("[DEBUG] Discarding message from archived WhatsApp chat JID: %s", msg.Info.Chat.String())
+		}
+		return
+	}
 
 	if msg.Message != nil && msg.Message.ProtocolMessage != nil {
 		if s.cfg.Debug {
@@ -592,6 +604,36 @@ func (s *SyncEngine) handleSignalMessage(ctx context.Context, event *SignalMessa
 	if msg == nil && event.Params.Envelope.SyncMessage != nil {
 		msg = event.Params.Envelope.SyncMessage.SentMessage
 	}
+
+	// Resolve the target Signal Chat JID to check archive status
+	var chatJID JID
+	if msg.GroupInfo != nil && msg.GroupInfo.GroupID != "" {
+		chatJID = JID{Raw: msg.GroupInfo.GroupID, IsGroup: true}
+	} else {
+		source := event.Params.Envelope.SourceNumber
+		if event.Params.Envelope.SyncMessage != nil && event.Params.Envelope.SyncMessage.SentMessage != nil {
+			sm := event.Params.Envelope.SyncMessage.SentMessage
+			source = sm.DestinationNumber
+			if source == "" {
+				source = sm.DestinationUuid
+			}
+			if source == "" {
+				source = sm.Destination
+			}
+		}
+		if source == "" {
+			source = event.Params.Envelope.SourceUUID
+		}
+		chatJID = JID{Raw: source, IsGroup: false}
+	}
+
+	if s.isSignalChatArchived(ctx, chatJID) {
+		if s.cfg.Debug {
+			log.Printf("[DEBUG] Discarding message from archived Signal chat JID: %s", chatJID.Raw)
+		}
+		return
+	}
+
 	log.Printf("[Sync Signal -> WhatsApp] Received message from Source: %s, Msg: %s", event.Params.Envelope.SourceNumber, msg.Message)
 
 	// Discard empty text messages without attachments
@@ -1036,4 +1078,94 @@ func (s *SyncEngine) getSignalGroupName(ctx context.Context, sigGroupID string) 
 		return name
 	}
 	return sigGroupID
+}
+
+func (s *SyncEngine) getSignalDBPath() (string, error) {
+	accountsJsonPath := filepath.Join(s.cfg.Storage.SignalConfigDir, "data", "accounts.json")
+	data, err := os.ReadFile(accountsJsonPath)
+	if err != nil {
+		return "", err
+	}
+
+	var schema struct {
+		Accounts []struct {
+			Number      string `json:"number"`
+			StorageName string `json:"storageName"`
+		} `json:"accounts"`
+	}
+	if err := json.Unmarshal(data, &schema); err != nil {
+		return "", err
+	}
+
+	var storageName string
+	for _, acc := range schema.Accounts {
+		if acc.Number == s.cfg.Accounts.SignalNumber {
+			storageName = acc.StorageName
+			break
+		}
+	}
+
+	if storageName == "" {
+		return "", fmt.Errorf("signal account %s not found in accounts.json", s.cfg.Accounts.SignalNumber)
+	}
+
+	return filepath.Join(s.cfg.Storage.SignalConfigDir, "data", storageName+".d", "account.db"), nil
+}
+
+func (s *SyncEngine) isSignalChatArchived(ctx context.Context, target JID) bool {
+	dbPath, err := s.getSignalDBPath()
+	if err != nil {
+		log.Printf("[SyncEngine] Failed to resolve Signal DB path: %v", err)
+		return false
+	}
+
+	// Open read-only WAL connection
+	db, err := sql.Open("sqlite3", fmt.Sprintf("file:%s?mode=ro&_journal_mode=WAL", dbPath))
+	if err != nil {
+		log.Printf("[SyncEngine] Failed to open Signal DB: %v", err)
+		return false
+	}
+	defer db.Close()
+
+	var archived int
+	if target.IsGroup {
+		groupIdBytes, err := base64.StdEncoding.DecodeString(target.Raw)
+		if err != nil {
+			return false
+		}
+		query := `
+			SELECT r.archived 
+			FROM recipient r 
+			JOIN group_v2 g ON r.storage_id = g.storage_id 
+			WHERE g.group_id = ?;
+		`
+		err = db.QueryRowContext(ctx, query, groupIdBytes).Scan(&archived)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return false
+			}
+			log.Printf("[SyncEngine] Failed to query Signal group archive status: %v", err)
+			return false
+		}
+	} else {
+		query := `SELECT archived FROM recipient WHERE number = ? OR aci = ?;`
+		err = db.QueryRowContext(ctx, query, target.Raw, target.Raw).Scan(&archived)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return false
+			}
+			log.Printf("[SyncEngine] Failed to query Signal recipient archive status: %v", err)
+			return false
+		}
+	}
+
+	return archived == 1
+}
+
+func (s *SyncEngine) isWhatsAppChatArchived(ctx context.Context, waGroupID string) bool {
+	jid, err := types.ParseJID(waGroupID)
+	if err != nil {
+		return false
+	}
+	return s.waClient.IsChatArchived(ctx, jid)
 }
