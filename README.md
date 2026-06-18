@@ -80,15 +80,36 @@ In debug mode, the syncer will:
 
 ## 3. Compilation & Installation (Sysadmin Guide)
 
-Follow these instructions to compile the binary and set up the execution environment from source.
+### Prebuilt Binaries
 
-### Prerequisites:
+The distribution contains prebuilt binaries, where the file suffix indicates the hardware platform:
+
+- Ending in `darwin-arm64` : macOS (ARM based)
+- Ending in `linux-arm5` : Linux (Raspberry Pi)
+
+To use a prebuilt binary, use the right command line instead of `whatsapp-signal-sync` stated elsewhere. E.g.:
+
+```sh
+# Initial setup
+./whatsapp-signal-sync-darwin-arm64 -setup
+
+# Sync mode, with verbose logging
+./whatsapp-signal-sync-darwin-arm64 -debug
+```
+
+The `Makefile` shows how these were compiled.
+
+### Compile it yourself
+
+If you want to compile the binary yourself, follow these instructions to compile the binary and set up the execution environment from source.
+
+#### Prerequisites:
 1. **Go Toolchain**: Go 1.25+ or 1.26+ must be installed.
 2. **signal-cli**: The binary `signal-cli` (v0.10.0 or higher) must be installed and available in the system path (`$PATH`).
    - On macOS: `brew install signal-cli`
    - On Linux: Download and install the latest tarball from the [signal-cli release page](https://github.com/AsamK/signal-cli/releases).
 
-### Compilation Steps:
+#### Compilation Steps:
 
 1. **Clone the Repository**:
    ```bash
