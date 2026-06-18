@@ -334,7 +334,7 @@ func (s *SignalClient) ListGroups(ctx context.Context) ([]SignalGroup, error) {
 type SendParams struct {
 	Message     string   `json:"message,omitempty"`
 	Recipient   string   `json:"recipient,omitempty"`
-	Group       string   `json:"group,omitempty"`
+	GroupID     string   `json:"groupId,omitempty"`
 	Attachments []string `json:"attachments,omitempty"`
 }
 
@@ -354,7 +354,7 @@ func (s *SignalClient) SendMessage(ctx context.Context, recipient, group, messag
 		Attachments: attachments,
 	}
 	if group != "" {
-		params.Group = group
+		params.GroupID = group
 	} else if recipient != "" {
 		params.Recipient = recipient
 	} else {

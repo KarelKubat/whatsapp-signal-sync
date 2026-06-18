@@ -331,16 +331,16 @@ func (s *SyncEngine) handleWhatsAppMessage(ctx context.Context, msg *events.Mess
 	var signalGroup string
 	var formattedText string
 
-	// Check if this WhatsApp message is a reply (quote) to a forwarded Signal message
-	quotedText := getQuotedMessageText(msg)
+	// Check if this WhatsApp message is a reply (quote)
+	quotedAuthorJID, quotedTextVal := getQuotedInfo(msg)
 	isReply := false
-	if quotedText != "" {
-		if sigNum := parsePrefix(quotedText, "[Signal Direct: ", "]"); sigNum != "" {
+	if quotedTextVal != "" {
+		if sigNum := parsePrefix(quotedTextVal, "[Signal Direct: ", "]"); sigNum != "" {
 			signalRecipient = sigNum
 			formattedText = text // send raw reply
 			isReply = true
 			log.Printf("[Sync WhatsApp -> Signal] Detected reply to Signal Direct number: %s", sigNum)
-		} else if sigGroupID := parsePrefix(quotedText, "[Signal Group: ", "]"); sigGroupID != "" {
+		} else if sigGroupID := parsePrefix(quotedTextVal, "[Signal Group: ", "]"); sigGroupID != "" {
 			// Check if this Signal group is linked!
 			isLinked := false
 			for _, targetSigID := range s.cfg.GroupLinks {
@@ -410,6 +410,16 @@ func (s *SyncEngine) handleWhatsAppMessage(ctx context.Context, msg *events.Mess
 			} else {
 				signalRecipient = s.cfg.Accounts.SignalNumber
 			}
+		}
+	}
+
+	// Append blockquote context for replies/quotes if present
+	if quotedTextVal != "" {
+		quoteBlock := formatQuote(quotedAuthorJID, quotedTextVal, s.cfg.Accounts.WhatsAppUserJID, s.cfg.Accounts.SignalNumber)
+		if formattedText != "" {
+			formattedText = formattedText + "\n" + quoteBlock
+		} else {
+			formattedText = quoteBlock
 		}
 	}
 
@@ -607,6 +617,16 @@ func (s *SyncEngine) handleSignalMessage(ctx context.Context, event *SignalMessa
 		}
 	}
 
+	// Append blockquote context for replies/quotes if present
+	if msg.Quote != nil && msg.Quote.Text != "" {
+		quoteBlock := formatQuote(msg.Quote.Author, msg.Quote.Text, s.cfg.Accounts.WhatsAppUserJID, s.cfg.Accounts.SignalNumber)
+		if formattedText != "" {
+			formattedText = formattedText + "\n" + quoteBlock
+		} else {
+			formattedText = quoteBlock
+		}
+	}
+
 	// Check for attachments (images/video)
 	hasAttachmentsFailed := false
 	var sentID string
@@ -704,28 +724,90 @@ func parsePrefix(text, patternStart, patternEnd string) string {
 	return text[startIdx : startIdx+endIdx]
 }
 
-func getQuotedMessageText(msg *events.Message) string {
-	if msg.Message == nil || msg.Message.ExtendedTextMessage == nil || msg.Message.ExtendedTextMessage.ContextInfo == nil {
-		return ""
+func getQuotedInfo(msg *events.Message) (authorJID string, quotedText string) {
+	if msg.Message == nil {
+		return "", ""
 	}
-	ctxInfo := msg.Message.ExtendedTextMessage.ContextInfo
-	if ctxInfo.QuotedMessage == nil {
-		return ""
+	var ctxInfo *waE2E.ContextInfo
+	if msg.Message.ExtendedTextMessage != nil {
+		ctxInfo = msg.Message.ExtendedTextMessage.ContextInfo
+	} else if msg.Message.ImageMessage != nil {
+		ctxInfo = msg.Message.ImageMessage.ContextInfo
+	} else if msg.Message.VideoMessage != nil {
+		ctxInfo = msg.Message.VideoMessage.ContextInfo
+	} else if msg.Message.AudioMessage != nil {
+		ctxInfo = msg.Message.AudioMessage.ContextInfo
 	}
+
+	if ctxInfo == nil || ctxInfo.QuotedMessage == nil {
+		return "", ""
+	}
+
+	authorJID = ctxInfo.GetParticipant()
 	qm := ctxInfo.QuotedMessage
 	if qm.Conversation != nil {
-		return qm.GetConversation()
+		quotedText = qm.GetConversation()
+	} else if qm.ExtendedTextMessage != nil {
+		quotedText = qm.GetExtendedTextMessage().GetText()
+	} else if qm.ImageMessage != nil {
+		quotedText = qm.ImageMessage.GetCaption()
+	} else if qm.VideoMessage != nil {
+		quotedText = qm.VideoMessage.GetCaption()
 	}
-	if qm.ExtendedTextMessage != nil {
-		return qm.GetExtendedTextMessage().GetText()
+	return authorJID, quotedText
+}
+
+func formatQuote(author, text string, selfJID, selfNumber string) string {
+	if text == "" {
+		return ""
 	}
-	if qm.ImageMessage != nil {
-		return qm.ImageMessage.GetCaption()
+	if strings.HasPrefix(text, "[") {
+		return formatBlockquote("", text)
 	}
-	if qm.VideoMessage != nil {
-		return qm.VideoMessage.GetCaption()
+
+	cleanAuthor := author
+	if parts := strings.Split(author, "@"); len(parts) > 0 {
+		cleanAuthor = parts[0]
 	}
-	return ""
+
+	cleanSelfJID := selfJID
+	if parts := strings.Split(selfJID, "@"); len(parts) > 0 {
+		cleanSelfJID = parts[0]
+	}
+
+	if cleanAuthor == cleanSelfJID || cleanAuthor == selfNumber {
+		// If it's sent by self (or the sync engine), check if the text already starts with a prefix like "Sender: "
+		hasSenderPrefix := false
+		colonIdx := strings.Index(text, ": ")
+		if colonIdx > 0 && colonIdx < 30 {
+			namePart := text[:colonIdx]
+			if !strings.Contains(namePart, "\n") {
+				hasSenderPrefix = true
+			}
+		}
+		if hasSenderPrefix {
+			return formatBlockquote("", text)
+		}
+		return formatBlockquote("Me", text)
+	}
+
+	return formatBlockquote(cleanAuthor, text)
+}
+
+func formatBlockquote(author, text string) string {
+	lines := strings.Split(text, "\n")
+	var quotedLines []string
+	if author != "" {
+		quotedLines = append(quotedLines, "> "+author+": "+lines[0])
+		for _, line := range lines[1:] {
+			quotedLines = append(quotedLines, "> "+line)
+		}
+	} else {
+		for _, line := range lines {
+			quotedLines = append(quotedLines, "> "+line)
+		}
+	}
+	return strings.Join(quotedLines, "\n")
 }
 
 func isAlreadyReceivingError(err error) bool {
