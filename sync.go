@@ -249,12 +249,13 @@ func (s *SyncEngine) handleWhatsAppMessage(ctx context.Context, msg *events.Mess
 
 	if s.cfg.Debug {
 		log.Printf("[DEBUG] handleWhatsAppMessage: msg.Message=%+v", msg.Message)
-		log.Printf("[DEBUG] Condition checks: Conversation=%t (GetConversation=%q), ExtendedTextMessage=%t (GetText=%q), AudioMessage=%t",
+		log.Printf("[DEBUG] Condition checks: Conversation=%t (GetConversation=%q), ExtendedTextMessage=%t (GetText=%q), AudioMessage=%t, SecretEncryptedMessage=%t",
 			msg.Message.Conversation != nil,
 			msg.Message.GetConversation(),
 			msg.Message.ExtendedTextMessage != nil,
 			msg.Message.GetExtendedTextMessage().GetText(),
 			msg.Message.AudioMessage != nil,
+			msg.Message.SecretEncryptedMessage != nil,
 		)
 	}
 
@@ -271,9 +272,16 @@ func (s *SyncEngine) handleWhatsAppMessage(ctx context.Context, msg *events.Mess
 	} else if msg.Message.AudioMessage != nil {
 		audioMsg = msg.Message.AudioMessage
 		text = ""
+	} else if msg.Message.SecretEncryptedMessage != nil {
+		encType := msg.Message.SecretEncryptedMessage.GetSecretEncType()
+		if encType == waE2E.SecretEncryptedMessage_MESSAGE_EDIT {
+			text = "[System: This message was edited on WhatsApp. Check there.]"
+		} else {
+			text = fmt.Sprintf("[System: WhatsApp received an encrypted message notification (type: %s).]", encType.String())
+		}
 	} else {
 		// Fallback for unsupported messages (like Polls)
-		text = "[WhatsApp received a message type that cannot be forwarded. Check your personal WhatsApp.]"
+		text = "[WhatsApp received a message type that cannot be forwarded. Check there.]"
 	}
 
 	// Prepare attachments
@@ -586,7 +594,11 @@ func (s *SyncEngine) handleSignalMessage(ctx context.Context, event *SignalMessa
 			} else {
 				// Unlinked group, forward to personal contact
 				whatsappTarget = JID{Raw: s.cfg.Accounts.WhatsAppUserJID, IsGroup: false}
-				formattedText = formatForwardText(fmt.Sprintf("[Signal Group: %s] %s (in %s)", sigGroupID, senderName, msg.GroupInfo.Name), "", msg.Message)
+				var groupSuffix string
+				if msg.GroupInfo.Name != "" {
+					groupSuffix = fmt.Sprintf(" (in %s)", msg.GroupInfo.Name)
+				}
+				formattedText = formatForwardText(fmt.Sprintf("[Signal Group: %s] %s%s", sigGroupID, senderName, groupSuffix), "", msg.Message)
 			}
 		} else {
 			// Personal message forwarding
@@ -644,7 +656,7 @@ func (s *SyncEngine) handleSignalMessage(ctx context.Context, event *SignalMessa
 				}
 			} else {
 				// Unsupported attachment type, notify user
-				_, _ = s.waClient.SendTextMessage(ctx, whatsappTarget, fmt.Sprintf("%s\n[Signal received an unsupported attachment type (%s). Check your personal Signal.]", formattedText, attachment.ContentType))
+				_, _ = s.waClient.SendTextMessage(ctx, whatsappTarget, fmt.Sprintf("%s\n[Signal received an unsupported attachment type (%s). Check there.]", formattedText, attachment.ContentType))
 			}
 		}
 	} else {
