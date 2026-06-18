@@ -655,6 +655,10 @@ func (s *SyncEngine) handleSignalMessage(ctx context.Context, event *SignalMessa
 		}
 	}
 
+	if isRoutedReply {
+		cleanText = formattedText
+	}
+
 	if !isRoutedReply {
 		if event.Params.Envelope.SourceNumber == s.cfg.Accounts.SignalNumber {
 			isLinkedGroup := false
