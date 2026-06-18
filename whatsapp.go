@@ -248,6 +248,29 @@ func (w *WhatsAppClient) GetGroups(ctx context.Context) ([]*types.GroupInfo, err
 	return w.client.GetJoinedGroups(ctx)
 }
 
+func (w *WhatsAppClient) GetGroupInfo(ctx context.Context, jid types.JID) (*types.GroupInfo, error) {
+	return w.client.GetGroupInfo(ctx, jid)
+}
+
+func (w *WhatsAppClient) ResolveJIDName(ctx context.Context, jid types.JID) string {
+	info, err := w.client.Store.Contacts.GetContact(ctx, jid)
+	if err == nil && info.Found {
+		if info.FullName != "" {
+			return info.FullName
+		}
+		if info.PushName != "" {
+			return info.PushName
+		}
+		if info.BusinessName != "" {
+			return info.BusinessName
+		}
+		if info.FirstName != "" {
+			return info.FirstName
+		}
+	}
+	return jid.User
+}
+
 // Simple wrapper around JID string to distinguish user / group JIDs cleanly
 type JID struct {
 	Raw     string

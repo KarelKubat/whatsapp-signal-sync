@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/proto/waE2E"
+	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
 )
 
@@ -32,16 +33,23 @@ type SyncEngine struct {
 	waSentIDs     map[string]time.Time
 	sigSentTimes  map[int64]time.Time
 	cacheMu       sync.Mutex
+
+	// Cache maps for group names
+	waGroupNames  map[string]string
+	sigGroupNames map[string]string
+	namesMu       sync.Mutex
 }
 
 func NewSyncEngine(cfg *Config, waClient *WhatsAppClient, sigClient *SignalClient) *SyncEngine {
 	return &SyncEngine{
-		cfg:          cfg,
-		waClient:     waClient,
-		sig:          sigClient,
-		done:         make(chan struct{}),
-		waSentIDs:    make(map[string]time.Time),
-		sigSentTimes: make(map[int64]time.Time),
+		cfg:           cfg,
+		waClient:      waClient,
+		sig:           sigClient,
+		done:          make(chan struct{}),
+		waSentIDs:     make(map[string]time.Time),
+		sigSentTimes:  make(map[int64]time.Time),
+		waGroupNames:  make(map[string]string),
+		sigGroupNames: make(map[string]string),
 	}
 }
 
@@ -54,16 +62,28 @@ func (s *SyncEngine) Start(ctx context.Context) {
 	// Try to find the Signal group named "Whatsapp Signal Sync"
 	sigGroups, err := s.sig.ListGroups(ctx)
 	if err == nil {
+		s.namesMu.Lock()
 		for _, g := range sigGroups {
-			if strings.ToLower(g.Name) == "whatsapp signal sync" {
+			s.sigGroupNames[g.ID] = g.Name
+			if strings.ToLower(g.Name) == "whatsapp signal sync" && s.personalSignalGroupID == "" {
 				s.personalSignalGroupID = g.ID
 				log.Printf("[SyncEngine] Found Signal group 'Whatsapp Signal Sync' (ID: %s). Direct personal forwards will be routed here.", g.ID)
-				break
 			}
 		}
+		s.namesMu.Unlock()
 	}
 	if s.personalSignalGroupID == "" {
 		log.Println("[SyncEngine] No 'Whatsapp Signal Sync' Signal group found. Defaulting personal forwards to 'Note to Self' (your Signal number).")
+	}
+
+	// Populate WhatsApp groups cache
+	waGroups, err := s.waClient.GetGroups(ctx)
+	if err == nil {
+		s.namesMu.Lock()
+		for _, g := range waGroups {
+			s.waGroupNames[g.JID.String()] = g.Name
+		}
+		s.namesMu.Unlock()
 	}
 
 	// Load State
@@ -348,11 +368,15 @@ func (s *SyncEngine) handleWhatsAppMessage(ctx context.Context, msg *events.Mess
 	var signalRecipient string
 	var signalGroup string
 	var formattedText string
+	var msgPrefix string
+	var cleanText string
 
 	// Check if this WhatsApp message is a reply (quote)
 	quotedAuthorJID, quotedTextVal, quotedStanzaID := getQuotedInfo(msg)
 	isReply := false
+	isRoutedReply := false
 	if quotedTextVal != "" {
+		isReply = true
 		s.stateMu.Lock()
 		mapping, found := s.state.WhatsAppReplies[quotedStanzaID]
 		s.stateMu.Unlock()
@@ -360,13 +384,13 @@ func (s *SyncEngine) handleWhatsAppMessage(ctx context.Context, msg *events.Mess
 			signalRecipient = mapping.SignalRecipient
 			signalGroup = mapping.SignalGroup
 			formattedText = text // send raw reply
-			isReply = true
+			isRoutedReply = true
 			log.Printf("[Sync WhatsApp -> Signal] Detected reply via database lookup. SignalRecipient: %s, SignalGroup: %s", signalRecipient, signalGroup)
 		} else if isSelfJID(quotedAuthorJID, s.cfg.Accounts.WhatsAppUserJID) {
 			if sigNum := parsePrefix(quotedTextVal, "[Signal Direct: ", "]"); sigNum != "" {
 				signalRecipient = sigNum
 				formattedText = text // send raw reply
-				isReply = true
+				isRoutedReply = true
 				log.Printf("[Sync WhatsApp -> Signal] Detected reply to Signal Direct number: %s", sigNum)
 			} else if sigGroupID := parsePrefix(quotedTextVal, "[Signal Group: ", "]"); sigGroupID != "" {
 				// Check if this Signal group is linked!
@@ -381,7 +405,7 @@ func (s *SyncEngine) handleWhatsAppMessage(ctx context.Context, msg *events.Mess
 				if isLinked {
 					signalGroup = sigGroupID
 					formattedText = text // send raw reply
-					isReply = true
+					isRoutedReply = true
 					log.Printf("[Sync WhatsApp -> Signal] Detected reply to linked Signal Group ID: %s", sigGroupID)
 				} else {
 					// Unlinked! Fail the reply and route back to personal account with warning header
@@ -391,20 +415,24 @@ func (s *SyncEngine) handleWhatsAppMessage(ctx context.Context, msg *events.Mess
 						signalRecipient = s.cfg.Accounts.SignalNumber
 					}
 					formattedText = fmt.Sprintf("[Signal Group Reply Failed] Could not reply to unlinked Signal group %s. Your reply: %s", sigGroupID, text)
-					isReply = true
+					isRoutedReply = true
 					log.Printf("[Sync WhatsApp -> Signal] Blocked reply to unlinked Signal Group ID: %s", sigGroupID)
 				}
 			}
 		}
 	}
 
-	if !isReply {
+	if isRoutedReply {
+		cleanText = formattedText
+	}
+
+	if !isRoutedReply {
 		if msg.Info.IsFromMe {
 			isLinkedGroup := false
 			if msg.Info.IsGroup {
 				_, isLinkedGroup = s.cfg.GroupLinks[msg.Info.Chat.String()]
 			}
-			if !isLinkedGroup {
+			if !isLinkedGroup && !isReply {
 				log.Printf("[Sync WhatsApp -> Signal] Discarding non-reply message from self in non-linked chat: Chat JID: %s, ID: %s", msg.Info.Chat.String(), msg.Info.ID)
 				return
 			}
@@ -417,14 +445,12 @@ func (s *SyncEngine) handleWhatsAppMessage(ctx context.Context, msg *events.Mess
 
 			if linked {
 				signalGroup = sigGroupID
-				if s.cfg.Debug {
-					formattedText = formatForwardText(fmt.Sprintf("[WhatsApp Group: %s]", waGroupID), senderName, text)
-				} else {
-					formattedText = formatForwardText("", senderName, text)
-				}
+				cleanText = formatForwardText("", senderName, text)
 			} else {
 				// Unlinked group, forward to personal account
-				formattedText = formatForwardText(fmt.Sprintf("[WhatsApp Group: %s]", waGroupID), senderName, text)
+				waGroupName := s.getWhatsAppGroupName(ctx, waGroupID)
+				msgPrefix = fmt.Sprintf("[%s]", waGroupName)
+				cleanText = formatForwardText("", senderName, text)
 				if s.personalSignalGroupID != "" {
 					signalGroup = s.personalSignalGroupID
 				} else {
@@ -433,7 +459,8 @@ func (s *SyncEngine) handleWhatsAppMessage(ctx context.Context, msg *events.Mess
 			}
 		} else {
 			// Personal message forwarding
-			formattedText = formatForwardText(fmt.Sprintf("[WhatsApp Direct: %s]", msg.Info.Sender.String()), senderName, text)
+			msgPrefix = fmt.Sprintf("[WhatsApp Direct: %s]", msg.Info.Sender.String())
+			cleanText = formatForwardText("", senderName, text)
 			if s.personalSignalGroupID != "" {
 				signalGroup = s.personalSignalGroupID
 			} else {
@@ -444,11 +471,17 @@ func (s *SyncEngine) handleWhatsAppMessage(ctx context.Context, msg *events.Mess
 
 	// Append blockquote context for replies/quotes if present
 	if quotedTextVal != "" {
-		quoteBlock := formatQuote(quotedAuthorJID, quotedTextVal, s.cfg.Accounts.WhatsAppUserJID, s.cfg.Accounts.SignalNumber)
-		if formattedText != "" {
-			formattedText = formattedText + "\n" + quoteBlock
+		quoteBlock := s.formatQuote(ctx, quotedAuthorJID, quotedTextVal)
+		if msgPrefix != "" {
+			formattedText = msgPrefix + "\n" + quoteBlock + "\n" + cleanText
 		} else {
-			formattedText = quoteBlock
+			formattedText = quoteBlock + "\n" + cleanText
+		}
+	} else {
+		if msgPrefix != "" {
+			formattedText = msgPrefix + " " + cleanText
+		} else {
+			formattedText = cleanText
 		}
 	}
 
@@ -571,10 +604,14 @@ func (s *SyncEngine) handleSignalMessage(ctx context.Context, event *SignalMessa
 	// Prepare JID target
 	var whatsappTarget JID
 	var formattedText string
+	var msgPrefix string
+	var cleanText string
 	isReply := false
 
 	// Check if this Signal message is a reply (quote) to a forwarded WhatsApp message
+	isRoutedReply := false
 	if msg.Quote != nil && msg.Quote.Text != "" {
+		isReply = true
 		quotedTimestamp := msg.Quote.ID
 		sigTsKey := fmt.Sprintf("%d", quotedTimestamp)
 		s.stateMu.Lock()
@@ -584,7 +621,7 @@ func (s *SyncEngine) handleSignalMessage(ctx context.Context, event *SignalMessa
 			isGroup := strings.HasSuffix(mapping.WhatsAppChatJID, "@g.us")
 			whatsappTarget = JID{Raw: mapping.WhatsAppChatJID, IsGroup: isGroup}
 			formattedText = msg.Message // send raw reply
-			isReply = true
+			isRoutedReply = true
 			log.Printf("[Sync Signal -> WhatsApp] Detected reply via database lookup. WhatsAppTarget: %s", mapping.WhatsAppChatJID)
 		} else if msg.Quote.Author == s.cfg.Accounts.SignalNumber {
 			quotedText := msg.Quote.Text
@@ -593,7 +630,7 @@ func (s *SyncEngine) handleSignalMessage(ctx context.Context, event *SignalMessa
 				if err == nil {
 					whatsappTarget = targetJID
 					formattedText = msg.Message // send raw reply
-					isReply = true
+					isRoutedReply = true
 					log.Printf("[Sync Signal -> WhatsApp] Detected reply to WhatsApp Direct JID: %s", waJIDStr)
 				}
 			} else if waGroupIDStr := parsePrefix(quotedText, "[WhatsApp Group: ", "]"); waGroupIDStr != "" {
@@ -604,13 +641,13 @@ func (s *SyncEngine) handleSignalMessage(ctx context.Context, event *SignalMessa
 					if linked {
 						whatsappTarget = targetJID
 						formattedText = msg.Message // send raw reply
-						isReply = true
+						isRoutedReply = true
 						log.Printf("[Sync Signal -> WhatsApp] Detected reply to linked WhatsApp Group JID: %s", waGroupIDStr)
 					} else {
 						// Unlinked! Fail the reply and route back to personal account with warning header
 						whatsappTarget = JID{Raw: s.cfg.Accounts.WhatsAppUserJID, IsGroup: false}
 						formattedText = fmt.Sprintf("[WhatsApp Group Reply Failed] Could not reply to unlinked WhatsApp group %s. Your reply: %s", waGroupIDStr, msg.Message)
-						isReply = true
+						isRoutedReply = true
 						log.Printf("[Sync Signal -> WhatsApp] Blocked reply to unlinked WhatsApp Group JID: %s", waGroupIDStr)
 					}
 				}
@@ -618,7 +655,7 @@ func (s *SyncEngine) handleSignalMessage(ctx context.Context, event *SignalMessa
 		}
 	}
 
-	if !isReply {
+	if !isRoutedReply {
 		if event.Params.Envelope.SourceNumber == s.cfg.Accounts.SignalNumber {
 			isLinkedGroup := false
 			if msg.GroupInfo != nil && msg.GroupInfo.GroupID != "" {
@@ -630,7 +667,7 @@ func (s *SyncEngine) handleSignalMessage(ctx context.Context, event *SignalMessa
 					}
 				}
 			}
-			if !isLinkedGroup {
+			if !isLinkedGroup && !isReply {
 				log.Printf("[Sync Signal -> WhatsApp] Discarding non-reply message from self in non-linked chat: Source: %s", event.Params.Envelope.SourceNumber)
 				return
 			}
@@ -652,34 +689,38 @@ func (s *SyncEngine) handleSignalMessage(ctx context.Context, event *SignalMessa
 
 			if isLinked {
 				whatsappTarget = JID{Raw: linkedWAJID, IsGroup: true}
-				if s.cfg.Debug {
-					formattedText = formatForwardText(fmt.Sprintf("[Signal Group: %s]", sigGroupID), senderName, msg.Message)
-				} else {
-					formattedText = formatForwardText("", senderName, msg.Message)
-				}
+				cleanText = formatForwardText("", senderName, msg.Message)
 			} else {
 				// Unlinked group, forward to personal contact
 				whatsappTarget = JID{Raw: s.cfg.Accounts.WhatsAppUserJID, IsGroup: false}
-				var groupSuffix string
-				if msg.GroupInfo.Name != "" {
-					groupSuffix = fmt.Sprintf(" (in %s)", msg.GroupInfo.Name)
+				sigGroupName := msg.GroupInfo.Name
+				if sigGroupName == "" {
+					sigGroupName = s.getSignalGroupName(ctx, sigGroupID)
 				}
-				formattedText = formatForwardText(fmt.Sprintf("[Signal Group: %s] %s%s", sigGroupID, senderName, groupSuffix), "", msg.Message)
+				msgPrefix = fmt.Sprintf("[%s]", sigGroupName)
+				cleanText = formatForwardText("", senderName, msg.Message)
 			}
 		} else {
 			// Personal message forwarding
 			whatsappTarget = JID{Raw: s.cfg.Accounts.WhatsAppUserJID, IsGroup: false}
-			formattedText = formatForwardText(fmt.Sprintf("[Signal Direct: %s]", event.Params.Envelope.SourceNumber), senderName, msg.Message)
+			msgPrefix = fmt.Sprintf("[Signal Direct: %s]", event.Params.Envelope.SourceNumber)
+			cleanText = formatForwardText("", senderName, msg.Message)
 		}
 	}
 
 	// Append blockquote context for replies/quotes if present
 	if msg.Quote != nil && msg.Quote.Text != "" {
-		quoteBlock := formatQuote(msg.Quote.Author, msg.Quote.Text, s.cfg.Accounts.WhatsAppUserJID, s.cfg.Accounts.SignalNumber)
-		if formattedText != "" {
-			formattedText = formattedText + "\n" + quoteBlock
+		quoteBlock := s.formatQuote(ctx, msg.Quote.Author, msg.Quote.Text)
+		if msgPrefix != "" {
+			formattedText = msgPrefix + "\n" + quoteBlock + "\n" + cleanText
 		} else {
-			formattedText = quoteBlock
+			formattedText = quoteBlock + "\n" + cleanText
+		}
+	} else {
+		if msgPrefix != "" {
+			formattedText = msgPrefix + " " + cleanText
+		} else {
+			formattedText = cleanText
 		}
 	}
 
@@ -828,7 +869,7 @@ func getQuotedInfo(msg *events.Message) (authorJID string, quotedText string, st
 	return authorJID, quotedText, stanzaID
 }
 
-func formatQuote(author, text string, selfJID, selfNumber string) string {
+func (s *SyncEngine) formatQuote(ctx context.Context, author, text string) string {
 	if text == "" {
 		return ""
 	}
@@ -841,12 +882,12 @@ func formatQuote(author, text string, selfJID, selfNumber string) string {
 		cleanAuthor = parts[0]
 	}
 
-	cleanSelfJID := selfJID
-	if parts := strings.Split(selfJID, "@"); len(parts) > 0 {
+	cleanSelfJID := s.cfg.Accounts.WhatsAppUserJID
+	if parts := strings.Split(s.cfg.Accounts.WhatsAppUserJID, "@"); len(parts) > 0 {
 		cleanSelfJID = parts[0]
 	}
 
-	if cleanAuthor == cleanSelfJID || cleanAuthor == selfNumber {
+	if cleanAuthor == cleanSelfJID || cleanAuthor == s.cfg.Accounts.SignalNumber {
 		// If it's sent by self (or the sync engine), check if the text already starts with a prefix like "Sender: "
 		hasSenderPrefix := false
 		colonIdx := strings.Index(text, ": ")
@@ -862,7 +903,25 @@ func formatQuote(author, text string, selfJID, selfNumber string) string {
 		return formatBlockquote("Me", text)
 	}
 
-	return formatBlockquote(cleanAuthor, text)
+	// Resolve WhatsApp JID to a name if possible
+	resolvedAuthor := cleanAuthor
+	if strings.Contains(author, "@") || strings.Contains(author, ":") { // Valid JID format
+		jid, err := types.ParseJID(author)
+		if err == nil {
+			resolvedAuthor = s.waClient.ResolveJIDName(ctx, jid)
+		}
+	} else if len(author) > 5 { // Might be a phone number without JID suffix
+		// Try parsing as user JID
+		jid, err := types.ParseJID(author + "@s.whatsapp.net")
+		if err == nil {
+			name := s.waClient.ResolveJIDName(ctx, jid)
+			if name != jid.User {
+				resolvedAuthor = name
+			}
+		}
+	}
+
+	return formatBlockquote(resolvedAuthor, text)
 }
 
 func formatBlockquote(author, text string) string {
@@ -918,4 +977,50 @@ func isSelfJID(jid string, selfJID string) bool {
 		cleanSelf = parts[0]
 	}
 	return cleanJID == cleanSelf
+}
+
+func (s *SyncEngine) getWhatsAppGroupName(ctx context.Context, waGroupID string) string {
+	s.namesMu.Lock()
+	name, exists := s.waGroupNames[waGroupID]
+	s.namesMu.Unlock()
+	if exists {
+		return name
+	}
+
+	jid, err := types.ParseJID(waGroupID)
+	if err == nil {
+		info, err := s.waClient.GetGroupInfo(ctx, jid)
+		if err == nil && info != nil {
+			s.namesMu.Lock()
+			s.waGroupNames[waGroupID] = info.Name
+			s.namesMu.Unlock()
+			return info.Name
+		}
+	}
+	return waGroupID
+}
+
+func (s *SyncEngine) getSignalGroupName(ctx context.Context, sigGroupID string) string {
+	s.namesMu.Lock()
+	name, exists := s.sigGroupNames[sigGroupID]
+	s.namesMu.Unlock()
+	if exists {
+		return name
+	}
+
+	groups, err := s.sig.ListGroups(ctx)
+	if err == nil {
+		s.namesMu.Lock()
+		for _, g := range groups {
+			s.sigGroupNames[g.ID] = g.Name
+			if g.ID == sigGroupID {
+				name = g.Name
+			}
+		}
+		s.namesMu.Unlock()
+	}
+	if name != "" {
+		return name
+	}
+	return sigGroupID
 }

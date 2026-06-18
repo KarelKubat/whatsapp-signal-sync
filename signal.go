@@ -339,7 +339,8 @@ type SendParams struct {
 }
 
 type SendResponse struct {
-	Results []struct {
+	Timestamp int64 `json:"timestamp"`
+	Results   []struct {
 		Recipient string `json:"recipient"`
 		Timestamp int64  `json:"timestamp"`
 	} `json:"results"`
@@ -367,8 +368,13 @@ func (s *SignalClient) SendMessage(ctx context.Context, recipient, group, messag
 	}
 
 	var resp SendResponse
-	if err := json.Unmarshal(result, &resp); err == nil && len(resp.Results) > 0 {
-		return resp.Results[0].Timestamp, nil
+	if err := json.Unmarshal(result, &resp); err == nil {
+		if resp.Timestamp > 0 {
+			return resp.Timestamp, nil
+		}
+		if len(resp.Results) > 0 {
+			return resp.Results[0].Timestamp, nil
+		}
 	}
 	return 0, nil
 }
