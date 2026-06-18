@@ -219,14 +219,14 @@ func (s *SyncEngine) handleWhatsAppMessage(ctx context.Context, msg *events.Mess
 	s.stateMu.Lock()
 	if s.state != nil {
 		isDuplicate := false
-		if msgTime < s.state.LastWhatsAppTimestamp {
+		if _, processed := s.state.WhatsAppProcessedIDs[msg.Info.ID]; processed {
 			isDuplicate = true
-		} else if msgTime == s.state.LastWhatsAppTimestamp && msg.Info.ID == s.state.LastWhatsAppMsgID {
+		} else if msgTime < s.state.LastWhatsAppTimestamp-3600 {
 			isDuplicate = true
 		}
 		if isDuplicate {
 			s.stateMu.Unlock()
-			log.Printf("[Sync WhatsApp -> Signal] Discarding duplicate or older message (msgTime: %d, lastTime: %d, msgID: %s, lastID: %s)", msgTime, s.state.LastWhatsAppTimestamp, msg.Info.ID, s.state.LastWhatsAppMsgID)
+			log.Printf("[Sync WhatsApp -> Signal] Discarding duplicate or older message (msgTime: %d, lastTime: %d, msgID: %s)", msgTime, s.state.LastWhatsAppTimestamp, msg.Info.ID)
 			return
 		}
 	}
@@ -279,9 +279,27 @@ func (s *SyncEngine) handleWhatsAppMessage(ctx context.Context, msg *events.Mess
 		} else {
 			text = fmt.Sprintf("[System: WhatsApp received an encrypted message notification (type: %s).]", encType.String())
 		}
-	} else {
-		// Fallback for unsupported messages (like Polls)
+	} else if msg.Message.PollCreationMessage != nil ||
+		msg.Message.PollCreationMessageV2 != nil ||
+		msg.Message.PollCreationMessageV3 != nil ||
+		msg.Message.PollCreationMessageV4 != nil ||
+		msg.Message.PollCreationMessageV5 != nil ||
+		msg.Message.PollCreationMessageV6 != nil ||
+		msg.Message.LocationMessage != nil ||
+		msg.Message.LiveLocationMessage != nil ||
+		msg.Message.ContactMessage != nil ||
+		msg.Message.ContactsArrayMessage != nil ||
+		msg.Message.TemplateMessage != nil ||
+		msg.Message.InteractiveMessage != nil ||
+		msg.Message.ButtonsMessage != nil {
+		// Fallback for unsupported user-facing messages (like Polls)
 		text = "[WhatsApp received a message type that cannot be forwarded. Check there.]"
+	} else {
+		// Silently ignore internal protocol/system messages (like SenderKeyDistributionMessage, ReactionMessage, etc.)
+		if s.cfg.Debug {
+			log.Printf("[DEBUG] Silently ignoring WhatsApp protocol/system message (ID: %s)", msg.Info.ID)
+		}
+		return
 	}
 
 	// Prepare attachments
@@ -440,8 +458,11 @@ func (s *SyncEngine) handleWhatsAppMessage(ctx context.Context, msg *events.Mess
 			// Update state
 			s.stateMu.Lock()
 			if s.state != nil {
-				s.state.LastWhatsAppTimestamp = msgTime
-				s.state.LastWhatsAppMsgID = msg.Info.ID
+				if msgTime > s.state.LastWhatsAppTimestamp {
+					s.state.LastWhatsAppTimestamp = msgTime
+				}
+				s.state.WhatsAppProcessedIDs[msg.Info.ID] = time.Now().Unix()
+				s.cleanUpWhatsAppProcessedIDs()
 				if err := SaveState(s.stateFilePath, s.state); err != nil {
 					log.Printf("[SyncEngine] Failed to save state: %v", err)
 				}
@@ -808,6 +829,15 @@ func formatBlockquote(author, text string) string {
 		}
 	}
 	return strings.Join(quotedLines, "\n")
+}
+
+func (s *SyncEngine) cleanUpWhatsAppProcessedIDs() {
+	cutoff := time.Now().Add(-24 * time.Hour).Unix()
+	for id, ts := range s.state.WhatsAppProcessedIDs {
+		if ts < cutoff {
+			delete(s.state.WhatsAppProcessedIDs, id)
+		}
+	}
 }
 
 func isAlreadyReceivingError(err error) bool {
