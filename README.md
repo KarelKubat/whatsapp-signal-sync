@@ -29,6 +29,7 @@ And thus the idea for `whatsapp-signal-sync` was born. It allows the folks who w
 - **Media Support**: Automatically downloads and transfers audio, images and videos in transit.
 - **Historical Catch-up Sync**: Remembers where it left off by saving its synchronization state in `./data/state.json`. If the daemon is stopped or suffers a network blackout, it automatically pulls and syncs any missed messages upon startup and re-triggers polling every 5 minutes.
 - **Safe Fallbacks**: Unsupported messages (like polls) are replaced with a clear text placeholder notifying you to check the original message on the source platform.
+- **Ignoring archived threads**: The sync daemon will ignore messages from archived WhatsApp and Signal threads.
 
 ---
 
