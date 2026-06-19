@@ -257,6 +257,13 @@ func (w *WhatsAppClient) IsChatArchived(ctx context.Context, jid types.JID) bool
 	if err == nil && settings.Found {
 		return settings.Archived
 	}
+	altJID, err := w.client.Store.GetAltJID(ctx, jid)
+	if err == nil && !altJID.IsEmpty() {
+		settings, err = w.client.Store.ChatSettings.GetChatSettings(ctx, altJID)
+		if err == nil && settings.Found {
+			return settings.Archived
+		}
+	}
 	return false
 }
 
