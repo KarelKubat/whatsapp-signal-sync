@@ -62,8 +62,7 @@ The archive comes with prebuilt binaries for various platforms (see section 3 fo
 
 ### Step 2.2: Interactive Group Linking
 - After both accounts are linked, the program will fetch all groups you belong to on both WhatsApp and Signal.
-- It will go through each WhatsApp group one-by-one and ask you to enter the number of the corresponding Signal group to link them together.
-- Enter the number of the matching Signal group, or press `s` to skip mapping (unlinked group messages will default to personal forwarding), or `d` if you are done (or `l` to see the list of available Signal groups).
+- It will show your WhatsApp groups. You can select a group to link, upon which your Signal groups are shown and you can select one of that list to link both groups.
 - The mapping is saved to `./data/config.yaml`.
 
 You can re-link groups anytime by re-running `whatsapp-signal-sync -setup`. The program will not ask you again to re-login. If you want to re-login, you have to delete the `./data/whatsapp.db` file.
