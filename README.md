@@ -86,7 +86,8 @@ In debug mode, the syncer will:
 The distribution contains prebuilt binaries, where the file suffix indicates the hardware platform:
 
 - Ending in `darwin-arm64` : macOS (ARM based)
-- Ending in `linux-arm5` : Linux (Raspberry Pi)
+- Ending in `linux-arm5` : Linux ARMv5 (Raspberry Pi 1, 2 and 3)
+- Ending in `linux-amd64` : Linux AMD64 (Intel/AMD x86-64)
 
 To use a prebuilt binary, use the right command line instead of `whatsapp-signal-sync` stated elsewhere. E.g.:
 
