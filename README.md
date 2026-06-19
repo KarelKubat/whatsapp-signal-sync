@@ -31,17 +31,25 @@ And thus the idea for `whatsapp-signal-sync` was born. It allows the folks who w
 - **Safe Fallbacks**: Unsupported messages (like polls) are replaced with a clear text placeholder notifying you to check the original message on the source platform.
 - **Ignoring archived threads**: The sync daemon will ignore messages from archived WhatsApp and Signal threads.
 
+### Prerequisites:
+1. Binaries for common operating systems and chipsets are provided. Alternatively, if you want to compile it yourself, you will need the **Go Toolchain**: Go 1.25+ or 1.26+ must be installed.
+2. **signal-cli**: The binary `signal-cli` (v0.10.0 or higher) must be installed and available in the system path (`$PATH`).
+   - On macOS: `brew install signal-cli`
+   - On Linux: Download and install the latest tarball from the [signal-cli release page](https://github.com/AsamK/signal-cli/releases).
+
 ---
 
 ## 2. Onboarding & Usage (End-User Guide)
 
-Once `whatsapp-signal-sync` is installed, follow these steps to link your accounts and start syncing.
+The archive comes with prebuilt binaries for various platforms (see section 3 for details). Use the appropriate binary for your platform and execute it with the `-setup` flag to start the interactive setup wizard:
 
-### Step 2.1: Initial Configuration & Registration
-Run the interactive setup wizard by executing:
-```bash
-whatsapp-signal-sync -setup
+```sh
+# Binary for MacOSX on ARM
+# Alternatively, if you have the Go toolchain installed, compile your own
+# and run that.
+./whatsapp-signal-sync-darwin-arm64 -setup
 ```
+
 
 1. **Enter Your Accounts Info**:
    - The program will prompt you to enter your **Signal Phone Number** (e.g. `+1234567890`) and your **WhatsApp JID** (e.g. `1234567890@s.whatsapp.net` which is your WhatsApp phone number followed by `@s.whatsapp.net`).
@@ -62,20 +70,31 @@ You can re-link groups anytime by re-running `whatsapp-signal-sync -setup`. The 
 
 ### Step 2.3: Running the Daemon
 To start the real-time sync engine, run the program without flags:
+
 ```bash
-whatsapp-signal-sync
+./whatsapp-signal-sync-darwin-arm64
 ```
 Keep this process running in your terminal (or run it under a process manager like systemd, launchd, or screen). To stop the sync daemon at any time, press `Ctrl+C`.
 
-You can optionally enable verbose debug mode using the `--debug` flag:
+You can optionally enable verbose debug mode using the `-debug` flag:
+
 ```bash
-whatsapp-signal-sync --debug
+./whatsapp-signal-sync-darwin-arm64 -debug
 ```
+
+If you want to save the output to log files, you can use the provided script `loglimit.pl`. It takes 3 arguments: the base name of the log file, the maximum size of the log file in bytes, and the number of history log files to keep.
+
+Example:
+```bash
+# 1048576 is 1MB, 10 is the number of history files to keep.
+# All logs will take up no more than 11 MB.
+./whatsapp-signal-sync-darwin-arm64 -debug 2>&1 | ./loglimit.pl debug.log 1048576 10
+```
+
 In debug mode, the syncer will:
 - Print detailed logs about the client setup and connection states.
 - Log the raw JSON payloads of all incoming events received from the WhatsApp and Signal sockets.
 - Log outgoing delivery payloads.
-- Include JID headers (e.g. `[WhatsApp Group: <ID>]` or `[Signal Group: <ID>]`) in the mirrored messages of linked groups (which are otherwise hidden during normal, non-debug operation to keep the chat history clean). Note that direct message and unlinked group message headers are always shown, as they are required to route replies.
 
 ---
 
@@ -89,27 +108,11 @@ The distribution contains prebuilt binaries, where the file suffix indicates the
 - Ending in `linux-arm5` : Linux ARMv5 (Raspberry Pi 1, 2 and 3)
 - Ending in `linux-amd64` : Linux AMD64 (Intel/AMD x86-64)
 
-To use a prebuilt binary, use the right command line instead of `whatsapp-signal-sync` stated elsewhere. E.g.:
-
-```sh
-# Initial setup
-./whatsapp-signal-sync-darwin-arm64 -setup
-
-# Sync mode, with verbose logging
-./whatsapp-signal-sync-darwin-arm64 -debug
-```
-
 The `Makefile` shows how these were compiled.
 
 ### Compile it yourself
 
 If you want to compile the binary yourself, follow these instructions to compile the binary and set up the execution environment from source.
-
-#### Prerequisites:
-1. **Go Toolchain**: Go 1.25+ or 1.26+ must be installed.
-2. **signal-cli**: The binary `signal-cli` (v0.10.0 or higher) must be installed and available in the system path (`$PATH`).
-   - On macOS: `brew install signal-cli`
-   - On Linux: Download and install the latest tarball from the [signal-cli release page](https://github.com/AsamK/signal-cli/releases).
 
 #### Compilation Steps:
 
