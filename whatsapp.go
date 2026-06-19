@@ -104,6 +104,11 @@ func (w *WhatsAppClient) Start(ctx context.Context) error {
 
 	// Wait to make sure connection is fully synchronized
 	time.Sleep(2 * time.Second)
+
+	// Fetch latest app state settings from server (archive status, mutes, etc.)
+	_ = w.client.FetchAppState(ctx, "regular_low", false, false)
+	_ = w.client.FetchAppState(ctx, "regular_high", false, false)
+
 	return nil
 }
 
@@ -129,6 +134,15 @@ func (w *WhatsAppClient) eventHandler(evt interface{}) {
 	switch v := evt.(type) {
 	case *events.Message:
 		w.incomingEvents <- v
+	case *events.Archive:
+		if v.Action != nil && v.Action.Archived != nil {
+			err := w.client.Store.ChatSettings.PutArchived(context.Background(), v.JID, *v.Action.Archived)
+			if err != nil {
+				log.Printf("[WhatsAppClient] Failed to update archived status for JID %s: %v", v.JID.String(), err)
+			} else {
+				log.Printf("[WhatsAppClient] Synced archive status for JID %s: %t", v.JID.String(), *v.Action.Archived)
+			}
+		}
 	}
 }
 
