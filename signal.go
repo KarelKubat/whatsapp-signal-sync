@@ -159,6 +159,9 @@ func (s *SignalClient) startOnce() error {
 		for scanner.Scan() {
 			log.Printf("[signal-cli stderr] %s", scanner.Text())
 		}
+		if err := scanner.Err(); err != nil {
+			log.Printf("[signal-cli stderr] error: %v", err)
+		}
 	}()
 
 	if err := s.cmd.Start(); err != nil {
@@ -409,6 +412,9 @@ func LinkDevice(ctx context.Context, signalCLIPath, configDir, deviceName string
 		for scanner.Scan() {
 			log.Printf("[signal-cli link stderr] %s", scanner.Text())
 		}
+		if err := scanner.Err(); err != nil {
+			log.Printf("[signal-cli link stderr] error: %v", err)
+		}
 	}()
 
 	if err := cmd.Start(); err != nil {
@@ -422,6 +428,9 @@ func LinkDevice(ctx context.Context, signalCLIPath, configDir, deviceName string
 			if len(line) > 0 {
 				qrChan <- line
 			}
+		}
+		if err := scanner.Err(); err != nil {
+			log.Printf("[signal-cli link stdout] error: %v", err)
 		}
 	}()
 

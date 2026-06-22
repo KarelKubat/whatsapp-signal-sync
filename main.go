@@ -62,7 +62,8 @@ func main() {
 		if err := SaveConfig(*configPath, cfg); err != nil {
 			log.Fatalf("Failed to save initial configuration: %v", err)
 		}
-		fmt.Println("Initial configuration saved successfully.\n")
+		fmt.Println("Initial configuration saved successfully.")
+		fmt.Println()
 	}
 
 	// Verify Signal linking
@@ -85,7 +86,8 @@ func main() {
 					} else {
 						fmt.Printf("Link URI: %s\n", linkURI)
 					}
-					fmt.Println("---------------------------------------------------------------------------------\n")
+					fmt.Println("---------------------------------------------------------------------------------")
+					fmt.Println()
 				}
 			}
 		}()

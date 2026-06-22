@@ -127,7 +127,8 @@ func (w *WhatsAppClient) renderQR(code string) {
 		return
 	}
 	fmt.Println(qr.ToSmallString(false))
-	fmt.Println("------------------------------------------------------\n")
+	fmt.Println("------------------------------------------------------")
+	fmt.Println()
 }
 
 func (w *WhatsAppClient) eventHandler(evt interface{}) {

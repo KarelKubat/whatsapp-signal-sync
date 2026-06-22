@@ -16,7 +16,8 @@ import (
 func RunSetup(ctx context.Context, cfgPath string, cfg *Config, waClient *WhatsAppClient, sigClient *SignalClient) error {
 	fmt.Println("\n=============================================")
 	fmt.Println("   WhatsApp - Signal Sync CLI: Group Setup   ")
-	fmt.Println("=============================================\n")
+	fmt.Println("=============================================")
+	fmt.Println()
 
 	fmt.Println("Fetching WhatsApp joined groups...")
 	waGroups, err := waClient.GetGroups(ctx)
@@ -111,6 +112,10 @@ func RunSetup(ctx context.Context, cfgPath string, cfg *Config, waClient *WhatsA
 			break
 		}
 		fmt.Println()
+	}
+
+	if err := scanner.Err(); err != nil {
+		return fmt.Errorf("error reading input: %v", err)
 	}
 
 	fmt.Println("Saving configuration...")
