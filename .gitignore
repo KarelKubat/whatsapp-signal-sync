@@ -1,3 +1,4 @@
 whatsapp-signal-sync
 data/
 *.log
+nohup.out
