@@ -8,7 +8,7 @@ A self-contained CLI utility designed to automatically synchronize your personal
 
 `whatsapp-signal-sync` is a bridging program written in Go that acts as a real-time forwarder between your WhatsApp and Signal accounts. 
 
-### But why?
+### 1.1 But why?
 
 ![But Why](butwhy.png)
 
@@ -18,7 +18,7 @@ Some people however strongly prefer Signal - so - would it not be nice to have t
 
 And thus the idea for `whatsapp-signal-sync` was born. It allows the folks who want to be on Signal (who are mostly more tech-savvy anyway) to run a syncer on their favorite Linux box, or on a Raspberry Pi, or on a little Mac mini. The less tech-savvy can stay on WhatsApp. With this setup, no one has to sacrifice their preferred platform.
 
-### Key Features:
+### 1.2 Key Features
 - **Two-way Syncing**: Messages sent or received on WhatsApp are forwarded to Signal, and vice versa.
 - **Group linking**: Connects specific WhatsApp groups to corresponding Signal groups to mirror group messages.
 - **Message Redirection & Replies**:
@@ -27,11 +27,11 @@ And thus the idea for `whatsapp-signal-sync` was born. It allows the folks who w
   - **Unlinked Group Safety**: If you reply to a message from an unlinked group, the syncer blocks the reply from being sent to the other group, and instead redirects it to your personal account on the other side prefixed with a `[Group Reply Failed]` warning.
 - **Clean Signal Group Integration**: If you create a Signal group named `"Whatsapp Signal Sync"`, the program automatically detects it and forwards all direct/personal and unlinked group messages there instead of polluting your personal `Note to Self` chat.
 - **Media Support**: Automatically downloads and transfers audio, images and videos in transit.
-- **Historical Catch-up Sync**: Remembers where it left off by saving its synchronization state in `./data/state.json`. If the daemon is stopped or suffers a network blackout, it automatically pulls and syncs any missed messages upon startup and re-triggers polling every 5 minutes.
+- **Historical Catch-up Sync**: Remembers where it left off by persisting synchronization state timestamps. If the daemon is stopped or suffers a network blackout, it automatically pulls and syncs any missed messages upon startup and re-triggers polling every 5 minutes.
 - **Safe Fallbacks**: Unsupported messages (like polls) are replaced with a clear text placeholder notifying you to check the original message on the source platform.
 - **Ignoring archived threads**: The sync daemon will ignore messages from archived WhatsApp and Signal threads.
 
-### Prerequisites:
+### 1.3 Prerequisites
 1. Binaries for common operating systems and chipsets are provided. Alternatively, if you want to compile it yourself, you will need the **Go Toolchain**: Go 1.25+ or 1.26+ must be installed.
 2. **signal-cli**: The binary `signal-cli` (v0.10.0 or higher) must be installed and available in the system path (`$PATH`).
    - On macOS: `brew install signal-cli`
@@ -41,15 +41,16 @@ And thus the idea for `whatsapp-signal-sync` was born. It allows the folks who w
 
 ## 2. Onboarding & Usage (End-User Guide)
 
+### 2.1 Account Linking (Setup Wizard)
+
 The archive comes with prebuilt binaries for various platforms (see section 3 for details). Use the appropriate binary for your platform and execute it with the `-setup` flag to start the interactive setup wizard:
 
 ```sh
 # Binary for MacOSX on ARM
-# Alternatively, if you have the Go toolchain installed, compile your own
-# and run that.
+# Alternatively, if you have the Go toolchain installed, you can 
+# compile your own and run that.
 ./whatsapp-signal-sync-darwin-arm64 -setup
 ```
-
 
 1. **Enter Your Accounts Info**:
    - The program will prompt you to enter your **Signal Phone Number** (e.g. `+1234567890`) and your **WhatsApp JID** (e.g. `1234567890@s.whatsapp.net` which is your WhatsApp phone number followed by `@s.whatsapp.net`).
@@ -60,14 +61,14 @@ The archive comes with prebuilt binaries for various platforms (see section 3 fo
    - The program will then output a **WhatsApp QR code** in your terminal.
    - Open your WhatsApp app on your phone, go to **Linked Devices -> Link a Device**, and scan this QR code.
 
-### Step 2.2: Interactive Group Linking
+### 2.2 Interactive Group Linking
 - After both accounts are linked, the program will fetch all groups you belong to on both WhatsApp and Signal.
 - It will show your WhatsApp groups. You can select a group to link, upon which your Signal groups are shown and you can select one of that list to link both groups.
-- The mapping is saved to `./data/config.yaml`.
+- The mapping is saved to the configuration file (see section 4).
 
-You can re-link groups anytime by re-running `whatsapp-signal-sync -setup`. The program will not ask you again to re-login. If you want to re-login, you have to delete the `./data/whatsapp.db` file.
+You can re-link groups anytime by re-running `whatsapp-signal-sync -setup`. The program will not ask you again to re-login. If you want to force a re-login, you can remove the session database file (see section 4).
 
-### Step 2.3: Running the Daemon
+### 2.3 Running the Daemon
 To start the real-time sync engine, run the program without flags:
 
 ```bash
@@ -81,25 +82,18 @@ You can optionally enable verbose debug mode using the `-debug` flag:
 ./whatsapp-signal-sync-darwin-arm64 -debug
 ```
 
-If you want to save the output to log files, you can use the provided script `loglimit.pl`. It takes 3 arguments: the base name of the log file, the maximum size of the log file in bytes, and the number of history log files to keep.
-
-Example:
-```bash
-# 1048576 is 1MB, 10 is the number of history files to keep.
-# All logs will take up no more than 11 MB.
-./whatsapp-signal-sync-darwin-arm64 -debug 2>&1 | ./loglimit.pl debug.log 1048576 10
-```
-
 In debug mode, the syncer will:
 - Print detailed logs about the client setup and connection states.
 - Log the raw JSON payloads of all incoming events received from the WhatsApp and Signal sockets.
 - Log outgoing delivery payloads.
 
+For details on saving output to managed log files with size limits and rotation, see section 4.3.
+
 ---
 
 ## 3. Compilation & Installation (Sysadmin Guide)
 
-### Prebuilt Binaries
+### 3.1 Prebuilt Binaries
 
 The distribution contains prebuilt binaries, where the file suffix indicates the hardware platform:
 
@@ -109,7 +103,7 @@ The distribution contains prebuilt binaries, where the file suffix indicates the
 
 The `Makefile` shows how these were compiled.
 
-### Compile it yourself
+### 3.2 Compiling from Source
 
 If you want to compile the binary yourself, follow these instructions to compile the binary and set up the execution environment from source.
 
@@ -136,13 +130,19 @@ If you want to compile the binary yourself, follow these instructions to compile
    ./whatsapp-signal-sync --help
    ```
 
-### Operational Directories & Configuration
-By default, the program creates and uses the following structure:
-- `./data/config.yaml`: Contains configuration parameters and group links.
-- `./data/whatsapp.db`: SQLite database storing active WhatsApp sessions.
-- `./data/signal/`: Holds Signal device keys, profiles, and configuration (used by `signal-cli`).
-- `./data/tmp/`: Used for temporary media caching during image/video forwarding.
+---
 
+## 4. Operational Directories & Configuration
+
+### 4.1 Data Directory Structure
+By default, the program creates and uses the following files and directories under `./data/`:
+- `./data/config.yaml`: Main configuration file containing account parameters and group link mappings.
+- `./data/whatsapp.db`: SQLite database storing active WhatsApp session and authentication tokens. (Delete this file if you wish to reset your WhatsApp login).
+- `./data/signal/`: Directory holding Signal device keys, profiles, and configuration data used by `signal-cli`.
+- `./data/state.json`: File storing synchronization state timestamps to enable historical catch-up sync across restarts.
+- `./data/tmp/`: Directory used for temporary media caching during image, audio, and video forwarding.
+
+### 4.2 Configuration File (config.yaml)
 Example of `./data/config.yaml`:
 ```yaml
 storage:
@@ -157,4 +157,19 @@ accounts:
 
 group_links:
   "120363024888888888@g.us": "EdY4T25/Tf+1Hk8gY1/p5Q=="
+```
+
+### 4.3 Log File Management (loglimit.pl)
+If you want to save the program's output to log files with automated size limiting and rotation, you can pipe the output into the provided helper script `loglimit.pl`.
+
+The `loglimit.pl` script takes 3 arguments:
+1. Base name of the log file.
+2. Maximum size of each log file in bytes.
+3. Number of backup history log files to retain.
+
+Example:
+```bash
+# 1048576 is 1MB, 10 is the number of history files to keep.
+# All logs will take up no more than 11 MB.
+./whatsapp-signal-sync-darwin-arm64 -debug 2>&1 | ./loglimit.pl debug.log 1048576 10
 ```
