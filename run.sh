@@ -1,7 +1,5 @@
 #!/bin/sh
 
-make || exit 1
-
 OS=$(uname -s)
 ARCH=$(uname -m)
 BINARY=""
