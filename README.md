@@ -89,6 +89,22 @@ In debug mode, the syncer will:
 
 For details on saving output to managed log files with size limits and rotation, see section 4.3.
 
+### 2.4 Message Sender Attribution & Dedicated Accounts (Symmetric Behavior)
+
+This message sender attribution behavior is **symmetric and applies in both directions**:
+
+1. **Signal to WhatsApp:** When messages are forwarded to WhatsApp, they are sent via the sync engine's authenticated WhatsApp session. Therefore, other group members on WhatsApp will see them as written by **you**.
+2. **WhatsApp to Signal:** When messages are forwarded to Signal, they are sent via the sync engine's authenticated Signal session. Therefore, other group members on Signal will see them as written by **you**.
+
+To ensure group members know who actually wrote the message, the syncer automatically prefixes the message content with the original sender's name (e.g., `John: hello`) in both directions.
+
+#### Recommended Best Practice:
+For the cleanest experience on both platforms and to avoid confusing other group members, it is highly recommended to set up **dedicated secondary accounts (bots/bridges)** for both Signal and WhatsApp:
+- **WhatsApp:** Register a secondary/virtual number, set its WhatsApp profile name to something like **"Signal Bridge"**, **"Sync Bot"**, or **"App Bridge"**, add it to your WhatsApp group, and authenticate the syncer with this secondary account.
+- **Signal:** Register a secondary Signal number, set its profile name to something like **"WhatsApp Bridge"** or **"Sync Bot"**, add it to your Signal group, and authenticate the syncer with this account.
+
+This ensures all forwarded messages in both groups are clearly attributed to the bridge bot rather than your personal user accounts.
+
 ---
 
 ## 3. Compilation & Installation (Sysadmin Guide)
