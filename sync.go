@@ -464,8 +464,10 @@ func (s *SyncEngine) handleWhatsAppMessage(ctx context.Context, msg *events.Mess
 				cleanText = formatForwardText("", senderName, text)
 			} else {
 				// Unlinked group, forward to personal account
-				waGroupName := s.getWhatsAppGroupName(ctx, waGroupID)
-				msgPrefix = fmt.Sprintf("[%s]", waGroupName)
+				waGroupName := strings.TrimSpace(s.getWhatsAppGroupName(ctx, waGroupID))
+				if waGroupName != "" {
+					msgPrefix = fmt.Sprintf("[%s]", waGroupName)
+				}
 				cleanText = formatForwardText("", senderName, text)
 				if s.personalSignalGroupID != "" {
 					signalGroup = s.personalSignalGroupID
@@ -486,6 +488,8 @@ func (s *SyncEngine) handleWhatsAppMessage(ctx context.Context, msg *events.Mess
 			}
 		}
 	}
+
+	msgPrefix = cleanMsgPrefix(msgPrefix)
 
 	// Append blockquote context for replies/quotes if present
 	if quotedTextVal != "" {
@@ -746,11 +750,13 @@ func (s *SyncEngine) handleSignalMessage(ctx context.Context, event *SignalMessa
 			} else {
 				// Unlinked group, forward to personal contact
 				whatsappTarget = JID{Raw: s.cfg.Accounts.WhatsAppUserJID, IsGroup: false}
-				sigGroupName := msg.GroupInfo.Name
+				sigGroupName := strings.TrimSpace(msg.GroupInfo.Name)
 				if sigGroupName == "" {
-					sigGroupName = s.getSignalGroupName(ctx, sigGroupID)
+					sigGroupName = strings.TrimSpace(s.getSignalGroupName(ctx, sigGroupID))
 				}
-				msgPrefix = fmt.Sprintf("[%s]", sigGroupName)
+				if sigGroupName != "" {
+					msgPrefix = fmt.Sprintf("[%s]", sigGroupName)
+				}
 				cleanText = formatForwardText("", senderName, msg.Message)
 			}
 		} else {
@@ -762,6 +768,8 @@ func (s *SyncEngine) handleSignalMessage(ctx context.Context, event *SignalMessa
 			cleanText = formatForwardText("", senderName, msg.Message)
 		}
 	}
+
+	msgPrefix = cleanMsgPrefix(msgPrefix)
 
 	// Append blockquote context for replies/quotes if present
 	if msg.Quote != nil && msg.Quote.Text != "" {
@@ -1020,6 +1028,20 @@ func formatForwardText(headerPrefix, senderName, messageText string) string {
 		return fmt.Sprintf("%s%s", prefix, senderName)
 	}
 	return fmt.Sprintf("%s%s: %s", prefix, senderName, messageText)
+}
+
+func cleanMsgPrefix(prefix string) string {
+	trimmed := strings.TrimSpace(prefix)
+	if trimmed == "[]" || trimmed == "" {
+		return ""
+	}
+	if strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]") {
+		inner := strings.TrimSpace(trimmed[1 : len(trimmed)-1])
+		if inner == "" || strings.HasSuffix(inner, ":") {
+			return ""
+		}
+	}
+	return trimmed
 }
 
 func isSelfJID(jid string, selfJID string) bool {
